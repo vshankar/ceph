@@ -2359,7 +2359,7 @@ void Objecter::handle_osd_op_reply(MOSDOpReply *m)
   }
 
   /* get it before we call _finish_op() */
-  Mutex *completion_lock = s->get_lock(op->target.base_oid);
+  Mutex *completion_lock = (op->target.base_oid.name.size() ? s->get_lock(op->target.base_oid) : NULL);
 
   // done with this tid?
   if (!op->onack && !op->oncommit) {
@@ -2370,8 +2370,9 @@ void Objecter::handle_osd_op_reply(MOSDOpReply *m)
   ldout(cct, 5) << num_unacked.read() << " unacked, " << num_uncommitted.read() << " uncommitted" << dendl;
 
   // serialize completions
-
-  completion_lock->Lock();
+  if (completion_lock) {
+    completion_lock->Lock();
+  }
   s->lock.unlock();
 
   // do callbacks
@@ -2381,7 +2382,9 @@ void Objecter::handle_osd_op_reply(MOSDOpReply *m)
   if (oncommit) {
     oncommit->complete(rc);
   }
-  completion_lock->Unlock();
+  if (completion_lock) {
+    completion_lock->Unlock();
+  }
 
   m->put();
   s->put();
