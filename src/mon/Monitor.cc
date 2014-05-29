@@ -2821,7 +2821,7 @@ void Monitor::waitlist_or_zap_client(Message *m)
     maybe_wait_for_quorum.push_back(new C_RetryMessage(this, m));
   } else {
     dout(5) << "discarding message " << *m << " and sending client elsewhere" << dendl;
-    messenger->mark_down(con);
+    con->mark_down();
     m->put();
   }
 }
@@ -3834,14 +3834,14 @@ void Monitor::tick()
     if (!s->until.is_zero() && s->until < now) {
       dout(10) << " trimming session " << s->con << " " << s->inst
 	       << " (until " << s->until << " < now " << now << ")" << dendl;
-      messenger->mark_down(s->con);
+      s->con->mark_down();
       remove_session(s);
     } else if (!exited_quorum.is_zero()) {
       if (now > (exited_quorum + 2 * g_conf->mon_lease)) {
         // boot the client Session because we've taken too long getting back in
         dout(10) << " trimming session " << s->con << " " << s->inst
 		 << " because we've been out of quorum too long" << dendl;
-        messenger->mark_down(s->con);
+        s->con->mark_down();
         remove_session(s);
       }
     }
