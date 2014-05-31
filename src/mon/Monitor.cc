@@ -2575,7 +2575,7 @@ void Monitor::handle_forward(MForward *m)
     // (c->msgr == NULL)
     ConnectionRef c = messenger->create_anon_connection();
     MonSession *s = new MonSession(m->msg->get_source_inst(),
-				   static_cast<Connection*>(c->get()));
+				   static_cast<Connection*>(c.get()));
     c->set_priv(s->get());
     c->set_peer_addr(m->client.addr);
     c->set_peer_type(m->client.name.type());
