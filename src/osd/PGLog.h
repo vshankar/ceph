@@ -372,6 +372,10 @@ public:
       h);
   }
 
+  version_t get_rollback_trimmed_to() const {
+    return log.rollback_info_trimmed_to.version;
+  }
+
   void clear_can_rollback_to(LogEntryHandler *h) {
     log.can_rollback_to = log.head;
     log.advance_rollback_info_trimmed_to(

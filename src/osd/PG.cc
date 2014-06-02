@@ -3274,6 +3274,36 @@ void PG::scrub_unreserve_replicas()
   }
 }
 
+void PG::_scan_rollback_obs(
+  const vector<ghobject_t> &rollback_obs,
+  ThreadPool::TPHandle &handle)
+{
+  ObjectStore::Transaction *t = new ObjectStore::Transaction;
+  bool need_repair = false;
+  version_t trimmed_to = pg_log.get_rollback_trimmed_to();
+  for (vector<ghobject_t>::const_iterator i = rollback_obs.begin();
+       i != rollback_obs.end();
+       ++i) {
+    if (i->generation < trimmed_to) {
+      osd->clog.error() << "osd." << osd->whoami
+			<< " pg " << info.pgid
+			<< " found obsolete rollback obj "
+			<< *i << " generation < trimmed_to "
+			<< trimmed_to
+			<< "...repaired";
+      t->remove(coll, *i);
+      need_repair = true;
+    }
+  }
+  if (need_repair) {
+    derr << __func__ << ": queueing trans to clean up obsolete rollback objs"
+	 << dendl;
+    osd->store->queue_transaction_and_cleanup(osr.get(), t);
+  } else {
+    delete t;
+  }
+}
+
 void PG::_scan_snaps(ScrubMap &smap) 
 {
   for (map<hobject_t, ScrubMap::object>::iterator i = smap.objects.begin();
@@ -3361,13 +3391,21 @@ int PG::build_scrub_map_chunk(
 
   // objects
   vector<hobject_t> ls;
-  int ret = get_pgbackend()->objects_list_range(start, end, 0, &ls);
+  vector<ghobject_t> rollback_obs;
+  int ret = get_pgbackend()->objects_list_range(
+    start,
+    end,
+    0,
+    &ls,
+    &rollback_obs);
   if (ret < 0) {
     dout(5) << "objects_list_range error: " << ret << dendl;
     return ret;
   }
 
+
   get_pgbackend()->be_scan_list(map, ls, deep, handle);
+  _scan_rollback_obs(rollback_obs, handle);
   _scan_snaps(map);
 
   // pg attrs
