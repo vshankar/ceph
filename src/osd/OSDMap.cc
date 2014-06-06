@@ -958,7 +958,7 @@ bool OSDMap::find_osd_on_ip(const entity_addr_t& ip) const
 }
 
 
-uint64_t OSDMap::get_features(uint64_t *pmask) const
+uint64_t OSDMap::get_features(int entity_type, uint64_t *pmask) const
 {
   uint64_t features = 0;  // things we actually have
   uint64_t mask = 0;      // things we could have
