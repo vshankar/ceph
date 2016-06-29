@@ -991,8 +991,7 @@ int mirror_image_disable_internal(ImageCtx *ictx, bool force,
     return r;
   }
 
-  int create_v1(IoCtx& io_ctx, const char *imgname, uint64_t bid,
-		uint64_t size, int order)
+  int create_v1(IoCtx& io_ctx, const char *imgname, uint64_t size, int order)
   {
     CephContext *cct = (CephContext *)io_ctx.cct();
 
@@ -1008,6 +1007,9 @@ int mirror_image_disable_internal(ImageCtx *ictx, bool force,
 		 << dendl;
       return r;
     }
+
+    Rados rados(io_ctx);
+    uint64_t bid = rados.get_instance_id();
 
     ldout(cct, 2) << "creating rbd image..." << dendl;
     struct rbd_obj_header_ondisk header;
@@ -1330,9 +1332,6 @@ int mirror_image_disable_internal(ImageCtx *ictx, bool force,
       return -EDOM;
     }
 
-    Rados rados(io_ctx);
-    uint64_t bid = rados.get_instance_id();
-
     // if striping is enabled, use possibly custom defaults
     if (!old_format && (features & RBD_FEATURE_STRIPINGV2) &&
 	!stripe_unit && !stripe_count) {
@@ -1360,7 +1359,7 @@ int mirror_image_disable_internal(ImageCtx *ictx, bool force,
       if (stripe_count && stripe_count != 1)
 	return -EINVAL;
 
-      r = create_v1(io_ctx, imgname, bid, size, order);
+      r = create_v1(io_ctx, imgname, size, order);
     } else {
       uint64_t journal_order = cct->_conf->rbd_journal_order;
       uint64_t journal_splay_width = cct->_conf->rbd_journal_splay_width;
