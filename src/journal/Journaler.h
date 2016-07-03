@@ -59,6 +59,7 @@ public:
 
   int exists(bool *header_exists) const;
   int create(uint8_t order, uint8_t splay_width, int64_t pool_id);
+  void create(uint8_t order, uint8_t splay_width, int64_t pool_id, Context *ctx);
   int remove(bool force);
 
   void init(Context *on_init);
