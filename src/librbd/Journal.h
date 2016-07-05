@@ -98,8 +98,6 @@ public:
                     const std::string &object_pool, bool non_primary,
                     const std::string &primary_mirror_uuid);
   static int remove(librados::IoCtx &io_ctx, const std::string &image_id);
-  static void remove(librados::IoCtx &io_ctx,
-                     const std::string &image_id, Context *on_finish);
   static int reset(librados::IoCtx &io_ctx, const std::string &image_id);
 
   static int is_tag_owner(ImageCtxT *image_ctx, bool *is_tag_owner);

@@ -16,6 +16,7 @@
 #include "common/WorkQueue.h"
 #include "include/rados/librados.hpp"
 #include "librbd/journal/Create.h"
+#include "librbd/journal/Remove.h"
 
 #include <boost/scope_exit.hpp>
 
@@ -378,15 +379,6 @@ int Journal<I>::remove(librados::IoCtx &io_ctx, const std::string &image_id) {
   Journaler journaler(io_ctx, image_id, IMAGE_CLIENT_ID,
                       cct->_conf->rbd_journal_commit_age);
 
-  bool journal_exists;
-  int r = journaler.exists(&journal_exists);
-  if (r < 0) {
-    lderr(cct) << "failed to stat journal header: " << cpp_strerror(r) << dendl;
-    return r;
-  } else if (!journal_exists) {
-    return 0;
-  }
-
   C_SaferCond cond;
   journaler.init(&cond);
   BOOST_SCOPE_EXIT_ALL(&journaler) {
@@ -401,12 +393,12 @@ int Journal<I>::remove(librados::IoCtx &io_ctx, const std::string &image_id) {
     return r;
   }
 
-  r = journaler.remove(true);
-  if (r < 0) {
-    lderr(cct) << "failed to remove journal: " << cpp_strerror(r) << dendl;
-    return r;
-  }
-  return 0;
+  C_SaferCond ctx;
+  journal::RemoveJournal<I>:: *req = journal::RemoveJournal<I>::create(
+    io_ctx, image_id, &journaler, &ctx);
+  req->send();
+
+  return ctx.wait();
 }
 
 template <typename I>
