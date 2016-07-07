@@ -432,7 +432,9 @@ int Journal<I>::reset(librados::IoCtx &io_ctx, const std::string &image_id) {
     }
   }
 
-  r = journaler.remove(true);
+  C_SaferCond ctx1;
+  journaler.remove(true, &ctx1);
+  r = ctx1.wait();
   if (r < 0) {
     lderr(cct) << "failed to reset journal: " << cpp_strerror(r) << dendl;
     return r;

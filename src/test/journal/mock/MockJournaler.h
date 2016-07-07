@@ -152,8 +152,8 @@ struct MockJournalerProxy {
   int create(uint8_t order, uint8_t splay_width, int64_t pool_id) {
     return -EINVAL;
   }
-  int remove(bool force) {
-    return -EINVAL;
+  void remove(bool force, Context *on_finish) {
+    on_finish->complete(-EINVAL);
   }
   int register_client(const bufferlist &data) {
     return -EINVAL;

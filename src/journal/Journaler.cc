@@ -255,28 +255,6 @@ void Journaler::create(uint8_t order, uint8_t splay_width,
   comp->release();
 }
 
-int Journaler::remove(bool force) {
-  C_SaferCond ctx;
-  m_metadata->shut_down(&ctx);
-  ctx.wait();
-
-  ldout(m_cct, 5) << "removing journal: " << m_header_oid << dendl;
-  int r = m_trimmer->remove_objects(force);
-  if (r < 0) {
-    lderr(m_cct) << "failed to remove journal objects: " << cpp_strerror(r)
-                 << dendl;
-    return r;
-  }
-
-  r = m_header_ioctx.remove(m_header_oid);
-  if (r < 0) {
-    lderr(m_cct) << "failed to remove journal header: " << cpp_strerror(r)
-                 << dendl;
-    return r;
-  }
-  return 0;
-}
-
 void Journaler::remove(bool force, Context *on_finish) {
   // chain journal removal (reverse order)
   librados::AioCompletion *comp = librados::Rados::aio_create_completion(
