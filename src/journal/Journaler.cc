@@ -202,25 +202,6 @@ void Journaler::get_mutable_metadata(uint64_t *minimum_set,
   m_metadata->get_mutable_metadata(minimum_set, active_set, clients, on_finish);
 }
 
-int Journaler::create(uint8_t order, uint8_t splay_width, int64_t pool_id) {
-  if (order > 64 || order < 12) {
-    lderr(m_cct) << "order must be in the range [12, 64]" << dendl;
-    return -EDOM;
-  }
-  if (splay_width == 0) {
-    return -EINVAL;
-  }
-
-  ldout(m_cct, 5) << "creating new journal: " << m_header_oid << dendl;
-  int r = client::create(m_header_ioctx, m_header_oid, order, splay_width,
-			 pool_id);
-  if (r < 0) {
-    lderr(m_cct) << "failed to create journal: " << cpp_strerror(r) << dendl;
-    return r;
-  }
-  return 0;
-}
-
 void Journaler::create(uint8_t order, uint8_t splay_width,
                       int64_t pool_id, Context *on_finish) {
   if (order > 64 || order < 12) {
