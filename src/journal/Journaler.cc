@@ -114,16 +114,6 @@ Journaler::~Journaler() {
   delete m_threads;
 }
 
-int Journaler::exists(bool *header_exists) const {
-  int r = m_header_ioctx.stat(m_header_oid, NULL, NULL);
-  if (r < 0 && r != -ENOENT) {
-    return r;
-  }
-
-  *header_exists = (r == 0);
-  return 0;
-}
-
 void Journaler::exists(Context *on_finish) const {
   librados::ObjectReadOperation op;
   op.stat(NULL, NULL, NULL);
