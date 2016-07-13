@@ -109,6 +109,9 @@ public:
   static int request_resync(ImageCtxT *image_ctx);
   static int promote(ImageCtxT *image_ctx);
 
+  static void init_safetimer_instance(CephContext *cct, SafeTimer **timer,
+                                      Mutex **timer_lock);
+
   bool is_journal_ready() const;
   bool is_journal_replaying() const;
 

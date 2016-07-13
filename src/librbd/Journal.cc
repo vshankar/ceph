@@ -316,12 +316,7 @@ Journal<I>::Journal(I &image_ctx)
   m_work_queue = new ContextWQ("librbd::journal::work_queue",
                                cct->_conf->rbd_op_thread_timeout,
                                thread_pool_singleton);
-
-  SafeTimerSingleton *safe_timer_singleton;
-  cct->lookup_or_create_singleton_object<SafeTimerSingleton>(
-    safe_timer_singleton, "librbd::journal::safe_timer");
-  m_timer = safe_timer_singleton;
-  m_timer_lock = &safe_timer_singleton->lock;
+  init_safetimer_instance(cct, &m_timer, &m_timer_lock);
 }
 
 template <typename I>
@@ -562,6 +557,16 @@ int Journal<I>::promote(I *image_ctx) {
   }
 
   return 0;
+}
+
+template<typename I>
+void Journal<I>::init_safetimer_instance(CephContext *cct, SafeTimer **timer,
+                                         Mutex **timer_lock) {
+  SafeTimerSingleton *safe_timer_singleton;
+  cct->lookup_or_create_singleton_object<SafeTimerSingleton>(
+    safe_timer_singleton, "librbd::journal::safe_timer");
+  *timer = safe_timer_singleton;
+  *timer_lock = &safe_timer_singleton->lock;
 }
 
 template <typename I>
