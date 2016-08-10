@@ -19,6 +19,7 @@
 #include "librbd/Journal.h"
 #include "librbd/Utils.h"
 #include "librbd/journal/Types.h"
+#include "librbd/image/RemoveRequest.h"
 #include "tools/rbd_mirror/ImageSync.h"
 #include "tools/rbd_mirror/ProgressContext.h"
 #include "tools/rbd_mirror/ImageSyncThrottler.h"
@@ -116,13 +117,68 @@ void BootstrapRequest<I>::handle_get_local_image_id(int r) {
 
   if (r == -ENOENT) {
     dout(10) << ": image not registered locally" << dendl;
+    get_remote_tag_class();
+    return;
   } else if (r < 0) {
     derr << ": failed to retrieve local image id: " << cpp_strerror(r) << dendl;
     finish(r);
     return;
   }
 
-  get_remote_tag_class();
+  get_local_image_state();
+}
+
+// TODO: fetch local imageid and state in a single rados class operation
+template<typename I>
+void BootstrapRequest<I>::get_local_image_state() {
+  dout(20) << dendl;
+
+  librados::ObjectReadOperation op;
+  librbd::cls_client::mirror_image_get_start(&op, m_local_image_id);
+
+  using klass = BootstrapRequest<I>;
+  librados::AioCompletion *rados_completion =
+    create_rados_ack_callback<klass, &klass::handle_get_local_image_state>(this);
+  m_out_bl.clear();
+  int r = m_local_io_ctx.aio_operate(RBD_MIRRORING, rados_completion, &op, &m_out_bl);
+  assert(r == 0);
+  rados_completion->release();
+}
+
+template<typename I>
+void BootstrapRequest<I>::handle_get_local_image_state(int r) {
+  dout(20) << ": r=" << r << dendl;
+
+  if (r < 0) {
+    derr << ": failed to retrieve local image state: " << cpp_strerror(r) << dendl;
+    finish(r);
+    return;
+  }
+
+  bufferlist::iterator iter = m_out_bl.begin();
+  r = librbd::cls_client::mirror_image_get_finish(&iter, &m_mirror_image);
+  if (r < 0) {
+    derr << ": failed to retrieve local image state: " << cpp_strerror(r) << dendl;
+    finish(r);
+    return;
+  }
+
+  if (m_mirror_image.state != cls::rbd::MIRROR_IMAGE_STATE_CREATING) {
+    get_remote_tag_class();
+    return;
+  }
+
+  // previously interrupted operation -- cleanup and continue
+  Context *ctx = new FunctionContext([this] (int r) {
+      if (r < 0) {
+        finish(r);
+        return;
+      }
+      m_local_image_id.clear();
+      get_remote_tag_class();
+    });
+
+  remove_local_image(ctx);
 }
 
 template <typename I>
@@ -382,34 +438,153 @@ void BootstrapRequest<I>::handle_open_local_image(int r) {
 }
 
 template <typename I>
+void BootstrapRequest<I>::remove_local_image(Context *on_finish) {
+  dout(20) << dendl;
+
+  update_progress("REMOVE_LOCAL_IMAGE");
+  on_finish = new FunctionContext([this, on_finish](int r) {
+      on_finish->complete(r == -ENOENT ? 0 : r);
+    });
+
+  librbd::image::RemoveRequest<I> *req = librbd::image::RemoveRequest<I>::create(
+    m_local_io_ctx, m_local_image_name, m_local_image_id, true, m_no_op,
+    m_work_queue, on_finish);
+  req->send();
+}
+
+template<typename I>
 void BootstrapRequest<I>::create_local_image() {
   dout(20) << dendl;
 
-  m_local_image_id = "";
   update_progress("CREATE_LOCAL_IMAGE");
 
-  Context *ctx = create_context_callback<
-    BootstrapRequest<I>, &BootstrapRequest<I>::handle_create_local_image>(
-      this);
-  CreateImageRequest<I> *request = CreateImageRequest<I>::create(
-    m_local_io_ctx, m_work_queue, m_global_image_id, m_remote_mirror_uuid,
-    m_local_image_name, m_remote_image_ctx, ctx);
-  request->send();
+  m_local_image_id = librbd::util::generate_image_id(m_local_io_ctx);
+  mirror_image_checkpoint_begin();
 }
 
-template <typename I>
-void BootstrapRequest<I>::handle_create_local_image(int r) {
+template<typename I>
+void BootstrapRequest<I>::mirror_image_checkpoint_begin() {
+  dout(20) << dendl;
+
+  // set global id as we can reach here due to an ENOENT
+  m_mirror_image.global_image_id = m_global_image_id;
+  m_mirror_image.state = cls::rbd::MIRROR_IMAGE_STATE_CREATING;
+
+  librados::ObjectWriteOperation op;
+  librbd::cls_client::mirror_image_set(&op, m_local_image_id, m_mirror_image);
+
+  using klass = BootstrapRequest<I>;
+  librados::AioCompletion *rados_completion =
+    create_rados_ack_callback<klass, &klass::handle_mirror_image_checkpoint_begin>(this);
+  int r = m_local_io_ctx.aio_operate(RBD_MIRRORING, rados_completion, &op);
+  assert(r == 0);
+  rados_completion->release();
+}
+
+template<typename I>
+void BootstrapRequest<I>::handle_mirror_image_checkpoint_begin(int r) {
   dout(20) << ": r=" << r << dendl;
 
   if (r < 0) {
-    derr << ": failed to create local image: " << cpp_strerror(r) << dendl;
+    derr << ": checkpoint failed before creation: " << cpp_strerror(r) << dendl;
     m_ret_val = r;
     close_remote_image();
     return;
   }
 
+  create_image();
+}
+
+template<typename I>
+void BootstrapRequest<I>::create_image() {
+  dout(20) << dendl;
+
+  Context *ctx = create_context_callback<
+    BootstrapRequest<I>, &BootstrapRequest<I>::handle_create_image>(this);
+  CreateImageRequest<I> *request = CreateImageRequest<I>::create(
+    m_local_io_ctx, m_work_queue, m_global_image_id, m_remote_mirror_uuid,
+    m_local_image_id, m_local_image_name, m_remote_image_ctx, ctx);
+  request->send();
+}
+
+template<typename I>
+void BootstrapRequest<I>::handle_create_image(int r) {
+  dout(20) << ": r=" << r << dendl;
+
+  if (r < 0) {
+    derr << ": failed to create local image: " << cpp_strerror(r) << dendl;
+    m_ret_val = r;
+    mirror_image_checkpoint_remove();
+    return;
+  }
+
+  mirror_image_checkpoint_end();
+}
+
+template<typename I>
+void BootstrapRequest<I>::mirror_image_checkpoint_end() {
+  dout(20) << dendl;
+
+  m_mirror_image.state = cls::rbd::MIRROR_IMAGE_STATE_ENABLED;
+
+  librados::ObjectWriteOperation op;
+  librbd::cls_client::mirror_image_set(&op, m_local_image_id, m_mirror_image);
+
+  using klass = BootstrapRequest<I>;
+  librados::AioCompletion *rados_completion =
+    create_rados_ack_callback<klass, &klass::handle_mirror_image_checkpoint_end>(this);
+  int r = m_local_io_ctx.aio_operate(RBD_MIRRORING, rados_completion, &op);
+  assert(r == 0);
+  rados_completion->release();
+}
+
+template<typename I>
+void BootstrapRequest<I>::handle_mirror_image_checkpoint_end(int r) {
+  dout(20) << ": r=" << r << dendl;
+
+  if (r < 0) {
+    // It gets bad here -- the image was successfully created but
+    // the checkpoint could not be marked. This tricks subsequent
+    // bootstraps (for this image) into assuming that image creation
+    // was interrupted in the last run. So, it's better to rollback
+    // and remove the image.
+    Context *ctx = new FunctionContext([this, r] (int _r) {
+        m_ret_val = r;
+        close_remote_image();
+        return;
+      });
+    remove_local_image(ctx);
+    return;
+  }
+
   m_created_local_image = true;
   open_local_image();
+}
+
+template<typename I>
+void BootstrapRequest<I>::mirror_image_checkpoint_remove() {
+  dout(20) << dendl;
+
+  librados::ObjectWriteOperation op;
+  librbd::cls_client::mirror_image_remove(&op, m_local_image_id);
+
+  using klass = BootstrapRequest<I>;
+  librados::AioCompletion *rados_completion = create_rados_ack_callback<
+    klass, &klass::handle_mirror_image_checkpoint_remove>(this);
+  int r = m_local_io_ctx.aio_operate(RBD_MIRRORING, rados_completion, &op);
+  assert(r == 0);
+  rados_completion->release();
+}
+
+template<typename I>
+void BootstrapRequest<I>::handle_mirror_image_checkpoint_remove(int r) {
+  dout(20) << ": r=" << r << dendl;
+
+  if ((r < 0) && (r != -ENOENT)) {
+    derr << ": removing checkpoint failed: " << cpp_strerror(r) << dendl;
+  }
+
+  close_remote_image();
 }
 
 template <typename I>

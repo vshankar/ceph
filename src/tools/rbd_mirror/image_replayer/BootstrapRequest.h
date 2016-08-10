@@ -7,10 +7,13 @@
 #include "include/int_types.h"
 #include "include/rados/librados.hpp"
 #include "common/Mutex.h"
+#include "cls/rbd/cls_rbd_types.h"
 #include "cls/journal/cls_journal_types.h"
+#include "librbd/internal.h"
 #include "librbd/journal/TypeTraits.h"
 #include "tools/rbd_mirror/BaseRequest.h"
 #include "tools/rbd_mirror/types.h"
+#include "tools/rbd_mirror/ProgressContext.h"
 #include <list>
 #include <string>
 
@@ -160,6 +163,7 @@ private:
   ProgressContext *m_progress_ctx;
   Mutex m_lock;
   bool m_canceled = false;
+  librbd::NoOpProgressContext m_no_op;
 
   Tags m_remote_tags;
   cls::journal::Client m_client;
@@ -169,9 +173,13 @@ private:
   int m_ret_val = 0;
 
   bufferlist m_out_bl;
+  cls::rbd::MirrorImage m_mirror_image;
 
   void get_local_image_id();
   void handle_get_local_image_id(int r);
+
+  void get_local_image_state();
+  void handle_get_local_image_state(int r);
 
   void get_remote_tag_class();
   void handle_get_remote_tag_class(int r);
@@ -191,11 +199,20 @@ private:
   void open_local_image();
   void handle_open_local_image(int r);
 
-  void remove_local_image();
-  void handle_remove_local_image(int r);
-
   void create_local_image();
-  void handle_create_local_image(int r);
+  void remove_local_image(Context *on_finish);
+
+  void mirror_image_checkpoint_begin();
+  void handle_mirror_image_checkpoint_begin(int r);
+
+  void create_image();
+  void handle_create_image(int r);
+
+  void mirror_image_checkpoint_end();
+  void handle_mirror_image_checkpoint_end(int r);
+
+  void mirror_image_checkpoint_remove();
+  void handle_mirror_image_checkpoint_remove(int r);
 
   void update_client_image();
   void handle_update_client_image(int r);

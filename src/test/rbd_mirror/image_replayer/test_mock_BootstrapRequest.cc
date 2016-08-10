@@ -11,6 +11,7 @@
 #include "tools/rbd_mirror/image_replayer/CreateImageRequest.h"
 #include "tools/rbd_mirror/image_replayer/OpenImageRequest.h"
 #include "tools/rbd_mirror/image_replayer/OpenLocalImageRequest.h"
+#include "librbd/image/RemoveRequest.h"
 #include "test/journal/mock/MockJournaler.h"
 #include "test/librados_test_stub/MockTestMemIoCtxImpl.h"
 #include "test/librbd/mock/MockImageCtx.h"
@@ -36,6 +37,39 @@ struct TypeTraits<librbd::MockTestImageCtx> {
 };
 
 } // namespace journal
+
+namespace image {
+
+template<>
+struct RemoveRequest<librbd::MockTestImageCtx> {
+  static RemoveRequest* s_instance;
+  Context *on_finish = nullptr;
+
+  static RemoveRequest* create(IoCtx &ioctx,
+                               const std::string &image_name,
+                               const std::string &image_id,
+                               bool force, ProgressContext &prog_ctx,
+                               ContextWQ *op_work_queue, Context *on_finish) {
+    assert(s_instance != nullptr);
+    s_instance->on_finish = on_finish;
+    return s_instance;
+  }
+
+  RemoveRequest() {
+    assert(s_instance == nullptr);
+    s_instance = this;
+  }
+  ~RemoveRequest() {
+    s_instance = nullptr;
+  }
+
+  MOCK_METHOD0(send, void());
+};
+
+RemoveRequest<librbd::MockTestImageCtx>*
+  RemoveRequest<librbd::MockTestImageCtx>::s_instance = nullptr;
+
+} // namespace image
 } // namespace librbd
 
 namespace rbd {
@@ -130,6 +164,7 @@ struct CreateImageRequest<librbd::MockTestImageCtx> {
                                     ContextWQ *work_queue,
                                     const std::string &global_image_id,
                                     const std::string &remote_mirror_uuid,
+                                    const std::string &local_image_id,
                                     const std::string &local_image_name,
                                     librbd::MockTestImageCtx *remote_image_ctx,
                                     Context *on_finish) {
@@ -288,6 +323,25 @@ public:
                 Return(r)));
   }
 
+    void expect_mirror_image_get_image_state(librados::IoCtx &io_ctx,
+                                             const std::string &image_id,
+                                             cls::rbd::MirrorImage &mirror_image, int r) {
+    bufferlist in_bl;
+    ::encode(image_id, in_bl);
+
+    bufferlist bl;
+    ::encode(mirror_image, bl);
+
+    EXPECT_CALL(get_mock_io_ctx(io_ctx),
+                exec(RBD_MIRRORING, _, StrEq("rbd"),
+                     StrEq("mirror_image_get"), ContentsEqual(in_bl),
+                     _, _))
+      .WillOnce(DoAll(WithArg<5>(Invoke([bl](bufferlist *out_bl) {
+                                   *out_bl = bl;
+                                 })),
+                Return(r)));
+  }
+
   void expect_journaler_get_client(::journal::MockJournaler &mock_journaler,
                                    const std::string &client_id,
                                    cls::journal::Client &client, int r) {
@@ -421,6 +475,10 @@ TEST_F(TestMockImageReplayerBootstrapRequest, NonPrimaryRemoteSyncingState) {
   librbd::MockTestImageCtx mock_local_image_ctx(*m_local_image_ctx);
   expect_mirror_image_get_image_id(m_local_io_ctx, "global image id",
                                    mock_local_image_ctx.id, 0);
+  cls::rbd::MirrorImage mirror_image("global image id",
+                                     cls::rbd::MIRROR_IMAGE_STATE_ENABLED);
+  expect_mirror_image_get_image_state(m_local_io_ctx,
+                                      mock_local_image_ctx.id, mirror_image, 0);
 
   // lookup remote image tag class
   cls::journal::Client client;
@@ -478,6 +536,10 @@ TEST_F(TestMockImageReplayerBootstrapRequest, RemoteDemotePromote) {
   librbd::MockTestImageCtx mock_local_image_ctx(*m_local_image_ctx);
   expect_mirror_image_get_image_id(m_local_io_ctx, "global image id",
                                    mock_local_image_ctx.id, 0);
+  cls::rbd::MirrorImage mirror_image("global image id",
+                                     cls::rbd::MIRROR_IMAGE_STATE_ENABLED);
+  expect_mirror_image_get_image_state(m_local_io_ctx,
+                                      mock_local_image_ctx.id, mirror_image, 0);
 
   // lookup remote image tag class
   cls::journal::Client client;
@@ -555,6 +617,10 @@ TEST_F(TestMockImageReplayerBootstrapRequest, MultipleRemoteDemotePromotes) {
   librbd::MockTestImageCtx mock_local_image_ctx(*m_local_image_ctx);
   expect_mirror_image_get_image_id(m_local_io_ctx, "global image id",
                                    mock_local_image_ctx.id, 0);
+  cls::rbd::MirrorImage mirror_image("global image id",
+                                     cls::rbd::MIRROR_IMAGE_STATE_ENABLED);
+  expect_mirror_image_get_image_state(m_local_io_ctx,
+                                      mock_local_image_ctx.id, mirror_image, 0);
 
   // lookup remote image tag class
   cls::journal::Client client;
@@ -642,6 +708,10 @@ TEST_F(TestMockImageReplayerBootstrapRequest, LocalDemoteRemotePromote) {
   librbd::MockTestImageCtx mock_local_image_ctx(*m_local_image_ctx);
   expect_mirror_image_get_image_id(m_local_io_ctx, "global image id",
                                    mock_local_image_ctx.id, 0);
+  cls::rbd::MirrorImage mirror_image("global image id",
+                                     cls::rbd::MIRROR_IMAGE_STATE_ENABLED);
+  expect_mirror_image_get_image_state(m_local_io_ctx,
+                                      mock_local_image_ctx.id, mirror_image, 0);
 
   // lookup remote image tag class
   cls::journal::Client client;
@@ -717,6 +787,10 @@ TEST_F(TestMockImageReplayerBootstrapRequest, SplitBrainForcePromote) {
   librbd::MockTestImageCtx mock_local_image_ctx(*m_local_image_ctx);
   expect_mirror_image_get_image_id(m_local_io_ctx, "global image id",
                                    mock_local_image_ctx.id, 0);
+  cls::rbd::MirrorImage mirror_image("global image id",
+                                     cls::rbd::MIRROR_IMAGE_STATE_ENABLED);
+  expect_mirror_image_get_image_state(m_local_io_ctx,
+                                      mock_local_image_ctx.id, mirror_image, 0);
 
   // lookup remote image tag class
   cls::journal::Client client;
