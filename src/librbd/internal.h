@@ -98,13 +98,6 @@ namespace librbd {
 		    std::set<std::pair<std::string, std::string> > & names);
   int list_children_info(ImageCtx *ictx, librbd::parent_spec parent_spec,
              std::map<std::pair<int64_t, std::string >, std::set<std::string> >& image_info);
-  void create_v2(IoCtx& io_ctx, std::string &imgname, uint64_t size,
-                 int order, uint64_t features, uint64_t stripe_unit,
-                 uint64_t stripe_count, uint8_t journal_order,
-                 uint8_t journal_splay_width, const std::string &journal_pool,
-                 const std::string &non_primary_global_image_id,
-                 const std::string &primary_mirror_uuid,
-                 ContextWQ *op_work_queue, Context *ctx);
   int create(librados::IoCtx& io_ctx, const char *imgname, uint64_t size,
 	     int *order);
   int create(librados::IoCtx& io_ctx, const char *imgname, uint64_t size,
@@ -165,9 +158,6 @@ namespace librbd {
   int unlock(ImageCtx *ictx, const std::string& cookie);
   int break_lock(ImageCtx *ictx, const std::string& client,
 		 const std::string& cookie);
-
-  void trim_image(ImageCtx *ictx, uint64_t newsize, ProgressContext& prog_ctx);
-
   int read_header_bl(librados::IoCtx& io_ctx, const std::string& md_oid,
 		     ceph::bufferlist& header, uint64_t *ver);
   int read_header(librados::IoCtx& io_ctx, const std::string& md_oid,
