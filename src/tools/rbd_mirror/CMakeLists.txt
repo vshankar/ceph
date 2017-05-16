@@ -33,7 +33,12 @@ set(rbd_mirror_internal
   image_sync/SnapshotCreateRequest.cc
   image_sync/SyncPointCreateRequest.cc
   image_sync/SyncPointPruneRequest.cc
-  pool_watcher/RefreshImagesRequest.cc)
+  pool_watcher/RefreshImagesRequest.cc
+  image_map/ImageSpec.cc
+  image_map/InstanceMap.cc
+  image_map/Policy.cc
+  image_map/SimplePolicy.cc)
+
 add_library(rbd_mirror_internal STATIC
   ${rbd_mirror_internal})
 
