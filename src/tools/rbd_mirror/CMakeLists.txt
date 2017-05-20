@@ -44,7 +44,8 @@ set(rbd_mirror_internal
   image_map/AddPeerRequest.cc
   image_map/InstanceMapShuffleRequest.cc
   image_map/InstanceMapRemoveRequest.cc
-  image_map/InstanceMapUpdateRequest.cc)
+  image_map/InstanceMapUpdateRequest.cc
+  image_map/InstanceMapper.cc)
 
 add_library(rbd_mirror_internal STATIC
   ${rbd_mirror_internal})
