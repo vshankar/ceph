@@ -37,7 +37,8 @@ set(rbd_mirror_internal
   image_map/ImageSpec.cc
   image_map/InstanceMap.cc
   image_map/Policy.cc
-  image_map/SimplePolicy.cc)
+  image_map/SimplePolicy.cc
+  image_map/InstanceMapGetRequest.cc)
 
 add_library(rbd_mirror_internal STATIC
   ${rbd_mirror_internal})
