@@ -1838,6 +1838,63 @@ namespace librbd {
       return ioctx->operate(RBD_MIRROR_LEADER, &op);
     }
 
+    void image_map_list_start(librados::ObjectReadOperation *op,
+                              std::string start_after, uint64_t max_read) {
+      bufferlist bl;
+      ::encode(start_after, bl);
+      ::encode(max_read, bl);
+
+      op->exec("rbd", "image_map_list", bl);
+    }
+
+    int image_map_list_finish(bufferlist::iterator *iter,
+                              std::map<std::string, cls::rbd::ImageMap> *image_map) {
+      image_map->clear();
+      try {
+        ::decode(*image_map, *iter);
+      } catch (const buffer::error &err) {
+        return -EBADMSG;
+      }
+      return 0;
+    }
+
+    void image_map_update(librados::ObjectWriteOperation *op,
+                          const std::string &global_image_id,
+                          cls::rbd::ImageMap &image_map) {
+      bufferlist bl;
+      ::encode(global_image_id, bl);
+      ::encode(image_map, bl);
+
+      op->exec("rbd", "image_map_update", bl);
+    }
+
+    void image_map_get_start(librados::ObjectReadOperation *op,
+                             const std::string &global_image_id) {
+      bufferlist bl;
+
+      ::encode(global_image_id, bl);
+      op->exec("rbd", "image_map_get", bl);
+    }
+
+    int image_map_get_finish(bufferlist::iterator *iter,
+                             cls::rbd::ImageMap *image_map) {
+      try {
+        ::decode(*image_map, *iter);
+      } catch (const buffer::error &err) {
+        return -EBADMSG;
+      }
+
+      return 0;
+    }
+
+    void image_map_remove(librados::ObjectWriteOperation *op,
+                          std::list<std::string> &global_ids) {
+      bufferlist bl;
+      ::encode(global_ids, bl);
+
+      op->exec("rbd", "image_map_remove", bl);
+    }
+
     // Consistency groups functions
     int group_create(librados::IoCtx *ioctx, const std::string &oid)
     {

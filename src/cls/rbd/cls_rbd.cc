@@ -3103,6 +3103,7 @@ static const std::string IMAGE_KEY_PREFIX("image_");
 static const std::string GLOBAL_KEY_PREFIX("global_");
 static const std::string STATUS_GLOBAL_KEY_PREFIX("status_global_");
 static const std::string INSTANCE_KEY_PREFIX("instance_");
+static const std::string IMAGE_MAP_KEY_PREFIX("map_image_");
 
 std::string peer_key(const std::string &uuid) {
   return PEER_KEY_PREFIX + uuid;
@@ -3122,6 +3123,10 @@ std::string status_global_key(const string &global_id) {
 
 std::string instance_key(const string &instance_id) {
   return INSTANCE_KEY_PREFIX + instance_id;
+}
+
+std::string image_map_key(const string& global_id) {
+  return IMAGE_MAP_KEY_PREFIX + global_id;
 }
 
 int uuid_get(cls_method_context_t hctx, std::string *mirror_uuid) {
@@ -3657,6 +3662,122 @@ int instances_remove(cls_method_context_t hctx, const string &instance_id) {
             cpp_strerror(r).c_str());
     return r;
   }
+  return 0;
+}
+
+int image_map_list(cls_method_context_t hctx,
+                   std::string& start_after, uint64_t max_return,
+                   std::map<std::string, cls::rbd::ImageMap> *image_map) {
+  int max_read = RBD_MAX_KEYS_READ;
+  int r = max_read;
+  std::string last_read = image_map_key(start_after);
+
+  while (r == max_read && image_map->size() < max_return) {
+    std::map<std::string, bufferlist> vals;
+    CLS_LOG(20, "last read: '%s'", last_read.c_str());
+
+    r = cls_cxx_map_get_vals(hctx, last_read, IMAGE_MAP_KEY_PREFIX,
+                             max_read, &vals);
+    if (r < 0) {
+      CLS_ERR("error reading image map: %s", cpp_strerror(r).c_str());
+      return r;
+    }
+
+    for (auto it = vals.begin(); it != vals.end(); ++it) {
+      const std::string& global_image_id =
+        it->first.substr(IMAGE_MAP_KEY_PREFIX.size());
+
+      cls::rbd::ImageMap imagemap;
+      bufferlist::iterator iter = it->second.begin();
+      try {
+        ::decode(imagemap, iter);
+      } catch (const buffer::error& err) {
+        CLS_ERR("could not decode image map payload: %s", cpp_strerror(r).c_str());
+        return -EINVAL;
+      }
+
+      image_map->insert(std::make_pair(global_image_id, imagemap));
+      if (image_map->size() == max_return) {
+        break;
+      }
+    }
+
+    if (!vals.empty()) {
+      last_read = image_map_key(image_map->rbegin()->first);
+    }
+  }
+
+  return 0;
+}
+
+int image_map_update(cls_method_context_t hctx,
+                     std::string &global_image_id,
+                     cls::rbd::ImageMap &image_map) {
+  bufferlist bl;
+  std::string key = image_map_key(global_image_id);
+
+  int r = cls_cxx_map_get_val(hctx, key, &bl);
+  if (r < 0 && r != -ENOENT) {
+    CLS_ERR("error reading image map %s: %s", key.c_str(),
+            cpp_strerror(r).c_str());
+    return r;
+  }
+
+  if (r == -ENOENT &&
+      image_map.state != cls::rbd::IMAGE_MAP_STATE_UNMAPPING) {
+    // cannot jump directly to any other state
+    return -EINVAL;
+  }
+
+  bl.clear();
+  ::encode(image_map, bl);
+
+  r = cls_cxx_map_set_val(hctx, key, &bl);
+  if (r < 0) {
+    CLS_ERR("error updating image map %s: %s", key.c_str(),
+            cpp_strerror(r).c_str());
+    return r;
+  }
+
+  return 0;
+}
+
+int image_map_get(cls_method_context_t hctx,
+                  std::string &global_image_id,
+                  cls::rbd::ImageMap *image_map) {
+  bufferlist bl;
+  std::string key = image_map_key(global_image_id);
+
+  int r = cls_cxx_map_get_val(hctx, key, &bl);
+  if (r < 0 && r != -ENOENT) {
+    CLS_ERR("error reading image map %s: %s", key.c_str(),
+            cpp_strerror(r).c_str());
+    return r;
+  }
+
+  if (r == 0) {
+    try {
+      bufferlist::iterator it = bl.begin();
+      ::decode(*image_map, it);
+    } catch (const buffer::error &err) {
+      CLS_ERR("error decoding %s", key.c_str());
+      return -EIO;
+    }
+  }
+
+  return r;
+}
+
+int image_map_remove(cls_method_context_t hctx, std::list<std::string> &global_ids) {
+  for (auto& it : global_ids) {
+    int r = cls_cxx_map_remove_key(hctx, image_map_key(it));
+    if (r < 0) {
+      CLS_ERR("error updating image map %s: %s", it.c_str(),
+              cpp_strerror(r).c_str());
+      return r;
+    }
+  }
+
   return 0;
 }
 
@@ -4395,6 +4516,118 @@ int mirror_instances_remove(cls_method_context_t hctx, bufferlist *in,
   if (r < 0) {
     return r;
   }
+  return 0;
+}
+
+/**
+ * Input:
+ * none
+ *
+ * Output:
+ * @param std::map<std::string, cls::rbd::ImageMap>: image map
+ * @returns 0 on success, negative error code on failure
+ */
+int image_map_list(cls_method_context_t hctx, bufferlist *in,
+                   bufferlist *out) {
+  std::string start_after;
+  uint64_t max_return;
+  try {
+    bufferlist::iterator it = in->begin();
+    ::decode(start_after, it);
+    ::decode(max_return, it);
+  } catch (const buffer::error& err) {
+    return -EINVAL;
+  }
+
+  std::map<std::string, cls::rbd::ImageMap> image_map;
+  int r = mirror::image_map_list(hctx, start_after, max_return, &image_map);
+  if (r < 0) {
+    return r;
+  }
+
+  ::encode(image_map, *out);
+  return 0;
+}
+
+/**
+ * Input:
+ * @param cls::rbd::ImageMap: image map
+ *
+ * Output:
+ * @returns 0 on success, negative error code on failure
+ */
+int image_map_update(cls_method_context_t hctx, bufferlist *in,
+                     bufferlist *out) {
+  std::string global_image_id;
+  cls::rbd::ImageMap image_map;
+
+  try {
+    bufferlist::iterator it = in->begin();
+    ::decode(global_image_id, it);
+    ::decode(image_map, it);
+  } catch (const buffer::error& err) {
+    return -EINVAL;
+  }
+
+  int r = mirror::image_map_update(hctx, global_image_id, image_map);
+  if (r < 0) {
+    return r;
+  }
+
+  return 0;
+}
+
+/**
+ * Input:
+ * none
+ *
+ * Output:
+ * @param std::map<std::string, cls::rbd::ImageMap>: image map
+ * @returns 0 on success, negative error code on failure
+ */
+int image_map_get(cls_method_context_t hctx, bufferlist *in,
+                  bufferlist *out) {
+  std::string global_image_id;
+  try {
+    bufferlist::iterator it = in->begin();
+    ::decode(global_image_id, it);
+  } catch (const buffer::error& err) {
+    return -EINVAL;
+  }
+
+  cls::rbd::ImageMap image_map;
+  int r = mirror::image_map_get(hctx, global_image_id, &image_map);
+  if (r < 0) {
+    return r;
+  }
+
+  ::encode(image_map, *out);
+  return 0;
+}
+
+/**
+ * Input:
+ * @param std::list<std::string>: global_id list
+ *
+ * Output:
+ * @returns 0 on success, negative error code on failure
+ */
+int image_map_remove(cls_method_context_t hctx, bufferlist *in,
+                     bufferlist *out) {
+  std::list<std::string> global_ids;
+
+  try {
+    bufferlist::iterator it = in->begin();
+    ::decode(global_ids, it);
+  } catch (const buffer::error& err) {
+    return -EINVAL;
+  }
+
+  int r = mirror::image_map_remove(hctx, global_ids);
+  if (r < 0) {
+    return r;
+  }
+
   return 0;
 }
 
@@ -5149,6 +5382,10 @@ CLS_INIT(rbd)
   cls_method_handle_t h_mirror_instances_list;
   cls_method_handle_t h_mirror_instances_add;
   cls_method_handle_t h_mirror_instances_remove;
+  cls_method_handle_t h_image_map_list;
+  cls_method_handle_t h_image_map_update;
+  cls_method_handle_t h_image_map_get;
+  cls_method_handle_t h_image_map_remove;
   cls_method_handle_t h_group_create;
   cls_method_handle_t h_group_dir_list;
   cls_method_handle_t h_group_dir_add;
@@ -5397,6 +5634,15 @@ CLS_INIT(rbd)
                           CLS_METHOD_RD | CLS_METHOD_WR,
                           mirror_instances_remove,
                           &h_mirror_instances_remove);
+  cls_register_cxx_method(h_class, "image_map_list", CLS_METHOD_RD,
+                          image_map_list, &h_image_map_list);
+  cls_register_cxx_method(h_class, "image_map_update",
+                          CLS_METHOD_WR | CLS_METHOD_RD,
+                          image_map_update, &h_image_map_update);
+  cls_register_cxx_method(h_class, "image_map_get", CLS_METHOD_RD,
+                          image_map_get, &h_image_map_get);
+  cls_register_cxx_method(h_class, "image_map_remove", CLS_METHOD_WR,
+                          image_map_remove, &h_image_map_remove);
   /* methods for the consistency groups feature */
   cls_register_cxx_method(h_class, "group_create",
 			  CLS_METHOD_RD | CLS_METHOD_WR,

@@ -376,6 +376,20 @@ namespace librbd {
     int mirror_instances_remove(librados::IoCtx *ioctx,
                                 const std::string &instance_id);
 
+    void image_map_list_start(librados::ObjectReadOperation *op,
+                              std::string start_after, uint64_t max_read);
+    int image_map_list_finish(bufferlist::iterator *iter,
+                              std::map<std::string, cls::rbd::ImageMap> *image_map);
+    void image_map_update(librados::ObjectWriteOperation *op,
+                          const std::string &global_image_id,
+                          cls::rbd::ImageMap &image_map);
+    void image_map_get_start(librados::ObjectReadOperation *op,
+                             const std::string &global_image_id);
+    int image_map_get_finish(bufferlist::iterator *iter,
+                             cls::rbd::ImageMap *image_map);
+    void image_map_remove(librados::ObjectWriteOperation *op,
+                          std::list<std::string> &global_ids);
+
     // Consistency groups functions
     int group_create(librados::IoCtx *ioctx, const std::string &oid);
     int group_dir_list(librados::IoCtx *ioctx, const std::string &oid,

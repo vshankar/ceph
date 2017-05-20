@@ -479,5 +479,48 @@ void TrashImageSpec::dump(Formatter *f) const {
   f->dump_unsigned("deferment_end_time", deferment_end_time);
 }
 
+void ImageMap::encode(bufferlist &bl) const {
+  ENCODE_START(1, 1, bl);
+  ::encode(instance_id, bl);
+  ::encode(static_cast<uint8_t>(state), bl);
+  ENCODE_FINISH(bl);
+}
+
+void ImageMap::decode(bufferlist::iterator &it) {
+  uint8_t int_state;
+  DECODE_START(1, it);
+  ::decode(instance_id, it);
+  ::decode(int_state, it);
+  state = static_cast<ImageMapState>(int_state);
+  DECODE_FINISH(it);
+}
+
+void ImageMap::dump(Formatter *f) const {
+  f->dump_string("instance_id", instance_id);
+  f->dump_int("state", state);
+}
+
+void ImageMap::generate_test_instances(std::list<ImageMap*> &o) {
+  o.push_back(new ImageMap());
+  o.push_back(new ImageMap("uuid-123", IMAGE_MAP_STATE_MAPPED));
+  o.push_back(new ImageMap("uuid-abc", IMAGE_MAP_STATE_MAPPED));
+}
+
+bool ImageMap::operator==(const ImageMap &rhs) const {
+  return instance_id == rhs.instance_id && state == rhs.state;
+}
+
+bool ImageMap::operator<(const ImageMap &rhs) const {
+  return  instance_id < rhs.instance_id ||
+                        (instance_id == rhs.instance_id && state < rhs.state);
+}
+
+std::ostream& operator<<(std::ostream& os, const ImageMap &image_map) {
+  os << "["
+     << "instance_id=" << image_map.instance_id << ", state="
+     << image_map.state << "]";
+  return os;
+}
+
 } // namespace rbd
 } // namespace cls

@@ -364,6 +364,35 @@ struct TrashImageSpec {
 };
 WRITE_CLASS_ENCODER(TrashImageSpec);
 
+enum ImageMapState {
+  IMAGE_MAP_STATE_UNASSIGNED = 0,
+  IMAGE_MAP_STATE_UNMAPPING,
+  IMAGE_MAP_STATE_MAPPING,
+  IMAGE_MAP_STATE_MAPPED,
+};
+
+struct ImageMap {
+  ImageMap() : state(IMAGE_MAP_STATE_UNASSIGNED) {}
+  ImageMap(const std::string &instance_id, ImageMapState state)
+    : instance_id(instance_id), state(state) {}
+
+  std::string instance_id;
+  ImageMapState state;
+
+  void encode(bufferlist &bl) const;
+  void decode(bufferlist::iterator &it);
+  void dump(Formatter *f) const;
+
+  static void generate_test_instances(std::list<ImageMap*> &o);
+
+  bool operator==(const ImageMap &rhs) const;
+  bool operator<(const ImageMap &rhs) const;
+};
+
+std::ostream& operator<<(std::ostream& os, const ImageMap &image_map);
+
+WRITE_CLASS_ENCODER(ImageMap);
+
 } // namespace rbd
 } // namespace cls
 
