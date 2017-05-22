@@ -23,15 +23,26 @@ template <typename> struct Threads;
 template <typename ImageCtxT = librbd::ImageCtx>
 class Instances {
 public:
+  struct InstancesListener {
+    virtual ~InstancesListener() {
+    }
+
+    virtual void instances_added(
+      std::vector<std::string> &instance_ids, Context *on_finish) = 0;
+    virtual void instances_removed(
+      std::vector<std::string> &instance_ids, Context *on_finish) = 0;
+  };
+
   static Instances *create(Threads<ImageCtxT> *threads,
-                           librados::IoCtx &ioctx) {
-    return new Instances(threads, ioctx);
+                           InstancesListener *listener, librados::IoCtx &ioctx) {
+    return new Instances(threads, listener, ioctx);
   }
   void destroy() {
     delete this;
   }
 
-  Instances(Threads<ImageCtxT> *threads, librados::IoCtx &ioctx);
+  Instances(Threads<ImageCtxT> *threads, InstancesListener *listener,
+            librados::IoCtx &ioctx);
   virtual ~Instances();
 
   void init(Context *on_finish);
@@ -67,22 +78,38 @@ private:
     }
   };
 
-  struct C_Notify : Context {
+  struct C_AddInstances : public Context {
     Instances *instances;
-    std::string instance_id;
+    std::vector<std::string> instance_ids;
 
-    C_Notify(Instances *instances, const std::string &instance_id)
-      : instances(instances), instance_id(instance_id) {
+    C_AddInstances(Instances *instances,
+                   std::vector<std::string>& instance_ids)
+      : instances(instances), instance_ids(instance_ids) {
       instances->m_async_op_tracker.start_op();
     }
 
     void finish(int r) override {
-      instances->handle_notify(instance_id);
+      instances->handle_add_instances(r, instance_ids);
       instances->m_async_op_tracker.finish_op();
     }
   };
 
+  struct C_RemoveInstances : public Context {
+    Instances *instances;
+    std::vector<std::string> instance_ids;
+
+    C_RemoveInstances(Instances *instances,
+                      std::vector<std::string> &instance_ids)
+      : instances(instances), instance_ids(instance_ids) {
+    }
+
+    void finish(int r) override {
+      instances->handle_remove_instance(r, instance_ids);
+    }
+  };
+
   Threads<ImageCtxT> *m_threads;
+  InstancesListener *m_listener;
   librados::IoCtx &m_ioctx;
   CephContext *m_cct;
 
@@ -92,7 +119,8 @@ private:
   Context *m_on_finish = nullptr;
   AsyncOpTracker m_async_op_tracker;
 
-  void handle_notify(const std::string &instance_id);
+  void add_instances(std::vector<std::string>& instance_ids);
+  void handle_add_instances(int r, std::vector<std::string>& instance_id);
 
   void get_instances();
   void handle_get_instances(int r);
@@ -101,7 +129,11 @@ private:
   void handle_wait_for_ops(int r);
 
   void remove_instance(Instance &instance);
-  void handle_remove_instance(int r);
+  void handle_remove_instance(
+    int r, std::vector<std::string> &instance_ids);
+
+  void remove_instance_object(std::string &instance_id);
+  void handle_remove_instance_object(int r);
 
   void cancel_remove_task(Instance &instance);
   void schedule_remove_task(Instance &instance);

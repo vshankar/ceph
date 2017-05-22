@@ -21,6 +21,7 @@
 #include "InstanceWatcher.h"
 #include "LeaderWatcher.h"
 #include "Threads.h"
+#include "image_map/InstanceMapper.h"
 
 #define dout_context g_ceph_context
 #define dout_subsys ceph_subsys_rbd_mirror
@@ -240,12 +241,12 @@ PoolReplayer::~PoolReplayer()
   if (m_leader_watcher) {
     m_leader_watcher->shut_down();
   }
-  if (m_instance_watcher) {
-    m_instance_watcher->shut_down();
-  }
-  if (m_instance_replayer) {
-    m_instance_replayer->shut_down();
-  }
+  // if (m_instance_watcher) {
+  // m_instance_watcher->shut_down();
+  // }
+  // if (m_instance_replayer) {
+  //  m_instance_replayer->shut_down();
+  // }
 
   assert(!m_local_pool_watcher);
   assert(!m_remote_pool_watcher);
@@ -286,43 +287,15 @@ int PoolReplayer::init()
     return r;
   }
 
-  std::string local_mirror_uuid;
-  r = librbd::cls_client::mirror_uuid_get(&m_local_io_ctx,
-                                          &local_mirror_uuid);
-  if (r < 0) {
-    derr << "failed to retrieve local mirror uuid from pool "
-         << m_local_io_ctx.get_pool_name() << ": " << cpp_strerror(r) << dendl;
-    return r;
-  }
+  m_instance_mapper.reset(InstanceMapper<>::create(
+                            m_threads, m_image_deleter, m_image_sync_throttler,
+                            m_peer, m_local_rados, m_remote_rados, m_local_pool_id,
+                            m_local_io_ctx, m_remote_io_ctx));
+  m_instance_mapper->init();
 
-  r = m_remote_rados->ioctx_create(m_local_io_ctx.get_pool_name().c_str(),
-                                   m_remote_io_ctx);
-  if (r < 0) {
-    derr << "error accessing remote pool " << m_local_io_ctx.get_pool_name()
-         << ": " << cpp_strerror(r) << dendl;
-    return r;
-  }
-
-  dout(20) << "connected to " << m_peer << dendl;
-
-  m_instance_replayer.reset(
-    InstanceReplayer<>::create(m_threads, m_image_deleter,
-                               m_image_sync_throttler, m_local_rados,
-                               local_mirror_uuid, m_local_pool_id));
-  m_instance_replayer->init();
-  m_instance_replayer->add_peer(m_peer.uuid, m_remote_io_ctx);
-
-  m_instance_watcher.reset(InstanceWatcher<>::create(m_local_io_ctx,
-                                                     m_threads->work_queue,
-                                                     m_instance_replayer.get()));
-  r = m_instance_watcher->init();
-  if (r < 0) {
-    derr << "error initializing instance watcher: " << cpp_strerror(r) << dendl;
-    return r;
-  }
-
-  m_leader_watcher.reset(new LeaderWatcher<>(m_threads, m_local_io_ctx,
-                                             &m_leader_listener));
+  m_leader_watcher.reset(new LeaderWatcher<>(
+                           m_threads, m_local_io_ctx, m_instance_mapper.get(),
+                           &m_leader_listener));
   r = m_leader_watcher->init();
   if (r < 0) {
     derr << "error initializing leader watcher: " << cpp_strerror(r) << dendl;
@@ -451,7 +424,7 @@ void PoolReplayer::print_status(Formatter *f, stringstream *ss)
   f->open_object_section("pool_replayer_status");
   f->dump_string("pool", m_local_io_ctx.get_pool_name());
   f->dump_stream("peer") << m_peer;
-  f->dump_string("instance_id", m_instance_watcher->get_instance_id());
+  // f->dump_string("instance_id", m_instance_watcher->get_instance_id());
 
   std::string leader_instance_id;
   m_leader_watcher->get_leader_instance_id(&leader_instance_id);
@@ -476,7 +449,7 @@ void PoolReplayer::print_status(Formatter *f, stringstream *ss)
                  reinterpret_cast<CephContext *>(m_remote_io_ctx.cct())->_conf->
                      admin_socket);
 
-  m_instance_replayer->print_status(f, ss);
+  // m_instance_replayer->print_status(f, ss);
 
   f->close_section();
   f->flush(*ss);
@@ -492,7 +465,7 @@ void PoolReplayer::start()
     return;
   }
 
-  m_instance_replayer->start();
+  // m_instance_replayer->start();
 }
 
 void PoolReplayer::stop(bool manual)
@@ -508,7 +481,7 @@ void PoolReplayer::stop(bool manual)
     return;
   }
 
-  m_instance_replayer->stop();
+  // m_instance_replayer->stop();
 }
 
 void PoolReplayer::restart()
@@ -521,7 +494,7 @@ void PoolReplayer::restart()
     return;
   }
 
-  m_instance_replayer->restart();
+  // m_instance_replayer->restart();
 }
 
 void PoolReplayer::flush()
@@ -534,7 +507,7 @@ void PoolReplayer::flush()
     return;
   }
 
-  m_instance_replayer->flush();
+  // m_instance_replayer->flush();
 }
 
 void PoolReplayer::release_leader()
@@ -587,37 +560,14 @@ void PoolReplayer::handle_update(const std::string &mirror_uuid,
     }
   }
 
-  if (!mirror_uuid.empty() && m_peer.uuid != mirror_uuid) {
-    m_instance_replayer->remove_peer(m_peer.uuid);
-    m_instance_replayer->add_peer(mirror_uuid, m_remote_io_ctx);
-    m_peer.uuid = mirror_uuid;
-  }
-
   m_update_op_tracker.start_op();
   Context *ctx = new FunctionContext([this](int r) {
       dout(20) << "complete handle_update: r=" << r << dendl;
       m_update_op_tracker.finish_op();
     });
 
-  C_Gather *gather_ctx = new C_Gather(g_ceph_context, ctx);
-
-  for (auto &image_id : added_image_ids) {
-    // for now always send to myself (the leader)
-    std::string &instance_id = m_instance_watcher->get_instance_id();
-    m_instance_watcher->notify_image_acquire(instance_id, image_id.global_id,
-                                             mirror_uuid, image_id.id,
-                                             gather_ctx->new_sub());
-  }
-
-  for (auto &image_id : removed_image_ids) {
-    // for now always send to myself (the leader)
-    std::string &instance_id = m_instance_watcher->get_instance_id();
-    m_instance_watcher->notify_image_release(instance_id, image_id.global_id,
-                                             mirror_uuid, image_id.id, true,
-                                             gather_ctx->new_sub());
-  }
-
-  gather_ctx->activate();
+  m_instance_mapper->handle_update(mirror_uuid, std::move(added_image_ids),
+                                   std::move(removed_image_ids), ctx);
 }
 
 void PoolReplayer::handle_post_acquire_leader(Context *on_finish) {
@@ -730,7 +680,7 @@ void PoolReplayer::handle_wait_for_update_ops(int r, Context *on_finish) {
   assert(r == 0);
 
   Mutex::Locker locker(m_lock);
-  m_instance_replayer->release_all(on_finish);
+  // m_instance_replayer->release_all(on_finish);
 }
 
 } // namespace mirror

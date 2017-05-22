@@ -25,8 +25,9 @@ using librbd::util::create_context_callback;
 using librbd::util::create_rados_callback;
 
 template <typename I>
-Instances<I>::Instances(Threads<I> *threads, librados::IoCtx &ioctx) :
-  m_threads(threads), m_ioctx(ioctx),
+Instances<I>::Instances(Threads<I> *threads, InstancesListener *listener,
+                        librados::IoCtx &ioctx) :
+  m_threads(threads), m_listener(listener), m_ioctx(ioctx),
   m_cct(reinterpret_cast<CephContext *>(ioctx.cct())),
   m_lock("rbd::mirror::Instances " + ioctx.get_pool_name()) {
 }
@@ -78,27 +79,55 @@ void Instances<I>::notify(const std::string &instance_id) {
     return;
   }
 
-  Context *ctx = new C_Notify(this, instance_id);
+  std::vector<std::string> instance_ids;
+  instance_ids.push_back(instance_id);
+
+  add_instances(instance_ids);
+}
+
+template <typename I>
+void Instances<I>::add_instances(std::vector<std::string>& instance_ids) {
+  dout(20) << dendl;
+
+  assert(m_lock.is_locked());
+
+  std::vector<std::string> instance_ids_new;
+  for (auto const& instance_id : instance_ids) {
+    if (m_instances.find(instance_id) == m_instances.end()) {
+      instance_ids_new.push_back(instance_id);
+    }
+  }
+
+  C_AddInstances *ctx = new C_AddInstances(this, instance_ids);
+  if (instance_ids_new.size()) {
+    m_listener->instances_added(instance_ids_new, ctx);
+    return;
+  }
 
   m_threads->work_queue->queue(ctx, 0);
 }
 
 template <typename I>
-void Instances<I>::handle_notify(const std::string &instance_id) {
-  dout(20) << instance_id << dendl;
+void Instances<I>::handle_add_instances(int r, std::vector<std::string>& instance_ids) {
+  dout(20) << "r=" << r << dendl;
 
-  Mutex::Locker timer_locker(m_threads->timer_lock);
+  Mutex::Locker timer_lock(m_threads->timer_lock);
   Mutex::Locker locker(m_lock);
 
-  if (m_on_finish != nullptr) {
-    dout(20) << "handled on shut down, ignoring" << dendl;
+  if (r < 0) {
+    derr << "failed to add instances: " << cpp_strerror(r) << dendl;
     return;
   }
 
-  auto &instance = m_instances.insert(
-    std::make_pair(instance_id, Instance(instance_id))).first->second;
-
-  schedule_remove_task(instance);
+  auto my_instance_id = stringify(m_ioctx.get_instance_id());
+  for (auto &instance_id : instance_ids) {
+    if (instance_id == my_instance_id) {
+      continue;
+    }
+    auto &instance = m_instances.insert(
+      std::make_pair(instance_id, Instance(instance_id))).first->second;
+    schedule_remove_task(instance);
+  }
 }
 
 template <typename I>
@@ -129,27 +158,22 @@ template <typename I>
 void Instances<I>::handle_get_instances(int r) {
   dout(20) << "r=" << r << dendl;
 
-  Context *on_finish = nullptr;
-  {
-    Mutex::Locker timer_locker(m_threads->timer_lock);
-    Mutex::Locker locker(m_lock);
+  Mutex::Locker locker(m_lock);
 
-    if (r < 0) {
-      derr << "error retrieving instances: " << cpp_strerror(r) << dendl;
-    } else {
-      auto my_instance_id = stringify(m_ioctx.get_instance_id());
-      for (auto &instance_id : m_instance_ids) {
-        if (instance_id == my_instance_id) {
-          continue;
-        }
-        auto &instance = m_instances.insert(
-          std::make_pair(instance_id, Instance(instance_id))).first->second;
-        schedule_remove_task(instance);
+  C_AddInstances *ctx = new C_AddInstances(this, m_instance_ids);
+  Context *on_finish = new FunctionContext([this, ctx](int r) {
+      ctx->complete(r);
+
+      Context *on_finish = nullptr;
+      {
+        Mutex::Locker locker(m_lock);
+        std::swap(on_finish, m_on_finish);
       }
-    }
-    std::swap(on_finish, m_on_finish);
-  }
-  on_finish->complete(r);
+
+      on_finish->complete(r);
+    });
+
+  m_listener->instances_added(m_instance_ids, on_finish);
 }
 
 template <typename I>
@@ -185,24 +209,49 @@ void Instances<I>::remove_instance(Instance &instance) {
 
   dout(20) << instance.id << dendl;
 
-  Context *ctx = create_async_context_callback(
-    m_threads->work_queue, create_context_callback<
-    Instances, &Instances<I>::handle_remove_instance>(this));
+  std::vector<std::string> instance_ids{instance.id};
+  C_RemoveInstances *ctx = new C_RemoveInstances(this, instance_ids);
 
   m_async_op_tracker.start_op();
+  m_listener->instances_removed(instance_ids, ctx);
+}
+
+template<typename I>
+void Instances<I>::handle_remove_instance(
+  int r, std::vector<std::string> &instance_ids) {
+  Mutex::Locker locker(m_lock);
+
+  dout(20) << ": r=" << r << dendl;
+
+  if (r < 0) {
+    derr << ": failed to remove instance: " << cpp_strerror(r) << dendl;
+    m_async_op_tracker.finish_op();
+    return;
+  }
+
+  remove_instance_object(instance_ids.front());
+}
+
+template<typename I>
+void Instances<I>::remove_instance_object(std::string &instance_id) {
+  assert(m_lock.is_locked());
+
+  Context *ctx = create_async_context_callback(
+    m_threads->work_queue, create_context_callback<
+    Instances, &Instances<I>::handle_remove_instance_object>(this));
+
   InstanceWatcher<I>::remove_instance(m_ioctx, m_threads->work_queue,
-                                      instance.id, ctx);
-  m_instances.erase(instance.id);
+                                      instance_id, ctx);
+  m_instances.erase(instance_id);
 }
 
 template <typename I>
-void Instances<I>::handle_remove_instance(int r) {
+void Instances<I>::handle_remove_instance_object(int r) {
   Mutex::Locker locker(m_lock);
 
   dout(20) << " r=" << r << dendl;
 
   assert(r == 0);
-
   m_async_op_tracker.finish_op();
 }
 

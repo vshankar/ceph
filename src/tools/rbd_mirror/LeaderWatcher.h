@@ -24,6 +24,12 @@ namespace mirror {
 
 template <typename> struct Threads;
 
+namespace image_map {
+  template <typename> class InstanceMapper;
+};
+
+using image_map::InstanceMapper;
+
 template <typename ImageCtxT = librbd::ImageCtx>
 class LeaderWatcher : protected librbd::Watcher {
 public:
@@ -36,7 +42,7 @@ public:
   };
 
   LeaderWatcher(Threads<ImageCtxT> *threads, librados::IoCtx &io_ctx,
-                Listener *listener);
+                InstanceMapper<ImageCtxT> *instance_mapper, Listener *listener);
   ~LeaderWatcher() override;
 
   int init();
@@ -140,6 +146,22 @@ private:
     LeaderWatcher *watcher;
   };
 
+  struct LeaderWatcherInstancesListener : public Instances<ImageCtxT>::InstancesListener {
+    LeaderWatcher *leader_watcher;
+
+    LeaderWatcherInstancesListener(LeaderWatcher *leader_watcher)
+      : leader_watcher(leader_watcher) {
+    }
+
+    void instances_added(std::vector<std::string>& instance_ids, Context *on_finish) {
+      leader_watcher->handle_instances_added(instance_ids, on_finish);
+    }
+
+    void instances_removed(std::vector<std::string>& instance_ids, Context *on_finish) {
+      leader_watcher->handle_instances_removed(instance_ids, on_finish);
+    }
+  };
+
   struct HandlePayloadVisitor : public boost::static_visitor<void> {
     LeaderWatcher *leader_watcher;
     Context *on_notify_ack;
@@ -186,6 +208,7 @@ private:
   };
 
   Threads<ImageCtxT> *m_threads;
+  InstanceMapper<ImageCtxT> *m_instance_mapper;
   Listener *m_listener;
 
   mutable Mutex m_lock;
@@ -204,6 +227,7 @@ private:
   C_TimerGate *m_timer_gate = nullptr;
 
   librbd::watcher::NotifyResponse m_heartbeat_response;
+  LeaderWatcherInstancesListener m_instances_listener;
 
   bool is_leader(Mutex &m_lock) const;
   bool is_releasing_leader(Mutex &m_lock) const;
@@ -273,6 +297,9 @@ private:
   void handle_post_acquire_leader_lock(int r, Context *on_finish);
   void handle_pre_release_leader_lock(Context *on_finish);
   void handle_post_release_leader_lock(int r, Context *on_finish);
+
+  void handle_instances_added(std::vector<std::string>& instance_ids, Context *on_finish);
+  void handle_instances_removed(std::vector<std::string>& instance_ids, Context *on_finish);
 
   void handle_notify(uint64_t notify_id, uint64_t handle,
                      uint64_t notifier_id, bufferlist &bl) override;

@@ -33,6 +33,12 @@ template <typename> struct Threads;
 template <typename> class InstanceReplayer;
 template <typename> class InstanceWatcher;
 
+namespace image_map {
+  template <typename> class InstanceMapper;
+};
+
+using image_map::InstanceMapper;
+
 /**
  * Controls mirroring for a single remote cluster.
  */
@@ -125,8 +131,6 @@ private:
   PoolWatcherListener m_remote_pool_watcher_listener;
   std::unique_ptr<PoolWatcher<> > m_remote_pool_watcher;
 
-  std::unique_ptr<InstanceReplayer<librbd::ImageCtx>> m_instance_replayer;
-
   std::string m_asok_hook_name;
   AdminSocketHook *m_asok_hook;
 
@@ -163,8 +167,9 @@ private:
     PoolReplayer *m_pool_replayer;
   } m_leader_listener;
 
+  std::unique_ptr<InstanceMapper<librbd::ImageCtx> > m_instance_mapper;
+
   std::unique_ptr<LeaderWatcher<> > m_leader_watcher;
-  std::unique_ptr<InstanceWatcher<librbd::ImageCtx> > m_instance_watcher;
   AsyncOpTracker m_update_op_tracker;
 };
 

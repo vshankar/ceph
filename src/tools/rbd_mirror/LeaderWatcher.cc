@@ -10,6 +10,7 @@
 #include "librbd/Utils.h"
 #include "librbd/watcher/Types.h"
 #include "Threads.h"
+#include "image_map/InstanceMapper.h"
 
 #define dout_context g_ceph_context
 #define dout_subsys ceph_subsys_rbd_mirror
@@ -27,13 +28,14 @@ using librbd::util::create_rados_callback;
 
 template <typename I>
 LeaderWatcher<I>::LeaderWatcher(Threads<I> *threads, librados::IoCtx &io_ctx,
-                                Listener *listener)
+                                InstanceMapper<I> *instance_mapper, Listener *listener)
   : Watcher(io_ctx, threads->work_queue, RBD_MIRROR_LEADER),
-    m_threads(threads), m_listener(listener),
+    m_threads(threads), m_instance_mapper(instance_mapper), m_listener(listener),
     m_lock("rbd::mirror::LeaderWatcher " + io_ctx.get_pool_name()),
     m_notifier_id(librados::Rados(io_ctx).get_instance_id()),
     m_leader_lock(new LeaderLock(m_ioctx, m_work_queue, m_oid, this, true,
-                                 m_cct->_conf->rbd_blacklist_expire_seconds)) {
+                                 m_cct->_conf->rbd_blacklist_expire_seconds)),
+    m_instances_listener(this) {
 }
 
 template <typename I>
@@ -756,7 +758,7 @@ void LeaderWatcher<I>::init_instances() {
   assert(m_lock.is_locked());
   assert(m_instances == nullptr);
 
-  m_instances = Instances<I>::create(m_threads, m_ioctx);
+  m_instances = Instances<I>::create(m_threads, &m_instances_listener, m_ioctx);
 
   Context *ctx = create_context_callback<
     LeaderWatcher<I>, &LeaderWatcher<I>::handle_init_instances>(this);
@@ -1035,6 +1037,22 @@ void LeaderWatcher<I>::handle_lock_released(Context *on_notify_ack) {
   }
 
   on_notify_ack->complete(0);
+}
+
+template <typename I>
+void LeaderWatcher<I>::handle_instances_added(std::vector<std::string>& instance_ids,
+                                              Context *on_finish) {
+  dout(20) << ": adding " << instance_ids.size() << " new instance(s)" << dendl;
+
+  m_instance_mapper->add_instances(instance_ids, on_finish);
+}
+
+template <typename I>
+void LeaderWatcher<I>::handle_instances_removed(std::vector<std::string>& instance_ids,
+                                                Context *on_finish) {
+  dout(20) << ": removing " << instance_ids.size() << " instance(s)" << dendl;
+
+  m_instance_mapper->remove_instances(instance_ids, on_finish);
 }
 
 template <typename I>
