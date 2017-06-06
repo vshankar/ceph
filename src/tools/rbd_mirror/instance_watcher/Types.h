@@ -23,6 +23,7 @@ enum NotifyOp {
   NOTIFY_OP_IMAGE_RELEASE  = 1,
   NOTIFY_OP_SYNC_REQUEST   = 2,
   NOTIFY_OP_SYNC_START     = 3,
+  NOTIFY_OP_PEER_UPDATE    = 4,
 };
 
 struct PayloadBase {
@@ -131,6 +132,29 @@ struct SyncStartPayload : public SyncPayloadBase {
   }
 };
 
+struct PeerUpdatePayload : public PayloadBase {
+  static const NotifyOp NOTIFY_OP = NOTIFY_OP_PEER_UPDATE;
+
+  uint64_t request_id;
+  std::string old_mirror_uuid;
+  std::string new_mirror_uuid;
+
+  PeerUpdatePayload() : PayloadBase() {
+  }
+
+  PeerUpdatePayload(uint64_t request_id,
+                    const std::string &old_mirror_uuid,
+                    const std::string &new_mirror_uuid)
+    : PayloadBase(request_id),
+      old_mirror_uuid(old_mirror_uuid),
+      new_mirror_uuid(new_mirror_uuid) {
+  }
+
+  void encode(bufferlist &bl) const;
+  void decode(__u8 version, bufferlist::iterator &iter);
+  void dump(Formatter *f) const;
+};
+
 struct UnknownPayload {
   static const NotifyOp NOTIFY_OP = static_cast<NotifyOp>(-1);
 
@@ -146,6 +170,7 @@ typedef boost::variant<ImageAcquirePayload,
                        ImageReleasePayload,
                        SyncRequestPayload,
                        SyncStartPayload,
+                       PeerUpdatePayload,
                        UnknownPayload> Payload;
 
 struct NotifyMessage {

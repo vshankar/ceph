@@ -304,10 +304,11 @@ int PoolReplayer::init()
   dout(20) << "connected to " << m_peer << dendl;
 
   m_instance_replayer.reset(
-    InstanceReplayer<>::create(m_threads, m_image_deleter, m_local_rados,
-                               local_mirror_uuid, m_local_pool_id));
+    InstanceReplayer<>::create(
+      m_remote_io_ctx, m_threads, m_image_deleter, m_local_rados,
+      local_mirror_uuid, m_local_pool_id));
   m_instance_replayer->init();
-  m_instance_replayer->add_peer(m_peer.uuid, m_remote_io_ctx);
+  m_instance_replayer->add_peer(m_peer.uuid);
 
   m_instance_watcher.reset(InstanceWatcher<>::create(m_local_io_ctx,
                                                      m_threads->work_queue,
@@ -591,7 +592,7 @@ void PoolReplayer::handle_update(const std::string &mirror_uuid,
 
   if (!mirror_uuid.empty() && m_peer.uuid != mirror_uuid) {
     m_instance_replayer->remove_peer(m_peer.uuid);
-    m_instance_replayer->add_peer(mirror_uuid, m_remote_io_ctx);
+    m_instance_replayer->add_peer(mirror_uuid);
     m_peer.uuid = mirror_uuid;
   }
 

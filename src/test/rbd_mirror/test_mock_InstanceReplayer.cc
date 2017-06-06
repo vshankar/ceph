@@ -134,7 +134,7 @@ TEST_F(TestMockInstanceReplayer, AcquireReleaseImage) {
   MockInstanceWatcher mock_instance_watcher;
   MockImageReplayer mock_image_replayer;
   MockInstanceReplayer instance_replayer(
-    m_mock_threads, m_image_deleter,
+    m_remote_io_ctx, m_mock_threads, m_image_deleter,
     rbd::mirror::RadosRef(new librados::Rados(m_local_io_ctx)),
     "local_mirror_uuid", m_local_io_ctx.get_id());
 
@@ -148,7 +148,7 @@ TEST_F(TestMockInstanceReplayer, AcquireReleaseImage) {
   InSequence seq;
 
   instance_replayer.init();
-  instance_replayer.add_peer("remote_mirror_uuid", m_remote_io_ctx);
+  instance_replayer.add_peer("remote_mirror_uuid");
 
   // Acquire
 

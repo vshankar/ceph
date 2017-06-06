@@ -121,6 +121,24 @@ void SyncPayloadBase::dump(Formatter *f) const {
   f->dump_string("sync_id", sync_id);
 }
 
+void PeerUpdatePayload::encode(bufferlist &bl) const {
+  PayloadBase::encode(bl);
+  ::encode(old_mirror_uuid, bl);
+  ::encode(new_mirror_uuid, bl);
+}
+
+void PeerUpdatePayload::decode(__u8 version, bufferlist::iterator &iter) {
+  PayloadBase::decode(version, iter);
+  ::decode(old_mirror_uuid, iter);
+  ::decode(new_mirror_uuid, iter);
+}
+
+void PeerUpdatePayload::dump(Formatter *f) const {
+  PayloadBase::dump(f);
+  f->dump_string("old_mirror_uuid", old_mirror_uuid);
+  f->dump_string("new_mirror_uuid", new_mirror_uuid);
+}
+
 void UnknownPayload::encode(bufferlist &bl) const {
   assert(false);
 }
@@ -157,6 +175,9 @@ void NotifyMessage::decode(bufferlist::iterator& iter) {
   case NOTIFY_OP_SYNC_START:
     payload = SyncStartPayload();
     break;
+  case NOTIFY_OP_PEER_UPDATE:
+    payload = PeerUpdatePayload();
+    break;
   default:
     payload = UnknownPayload();
     break;
@@ -183,6 +204,9 @@ void NotifyMessage::generate_test_instances(std::list<NotifyMessage *> &o) {
 
   o.push_back(new NotifyMessage(SyncStartPayload()));
   o.push_back(new NotifyMessage(SyncStartPayload(1, "sync_id")));
+
+  o.push_back(new NotifyMessage(PeerUpdatePayload()));
+  o.push_back(new NotifyMessage(PeerUpdatePayload(1, "uuid1", "uuid2")));
 }
 
 std::ostream &operator<<(std::ostream &out, const NotifyOp &op) {
@@ -198,6 +222,9 @@ std::ostream &operator<<(std::ostream &out, const NotifyOp &op) {
     break;
   case NOTIFY_OP_SYNC_START:
     out << "SyncStart";
+    break;
+  case NOTIFY_OP_PEER_UPDATE:
+    out << "PeerUpdate";
     break;
   default:
     out << "Unknown (" << static_cast<uint32_t>(op) << ")";

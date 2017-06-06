@@ -27,17 +27,19 @@ template <typename ImageCtxT = librbd::ImageCtx>
 class InstanceReplayer {
 public:
   static InstanceReplayer* create(
-      Threads<ImageCtxT> *threads, std::shared_ptr<ImageDeleter> image_deleter,
-      RadosRef local_rados, const std::string &local_mirror_uuid,
-      int64_t local_pool_id) {
-    return new InstanceReplayer(threads, image_deleter, local_rados,
+    librados::IoCtx &ioctx, Threads<ImageCtxT> *threads,
+    std::shared_ptr<ImageDeleter> image_deleter,
+    RadosRef local_rados, const std::string &local_mirror_uuid,
+    int64_t local_pool_id) {
+    return new InstanceReplayer(ioctx, threads, image_deleter, local_rados,
                                 local_mirror_uuid, local_pool_id);
   }
   void destroy() {
     delete this;
   }
 
-  InstanceReplayer(Threads<ImageCtxT> *threads,
+  InstanceReplayer(librados::IoCtx &ioctx,
+		   Threads<ImageCtxT> *threads,
 		   std::shared_ptr<ImageDeleter> image_deleter,
 		   RadosRef local_rados, const std::string &local_mirror_uuid,
 		   int64_t local_pool_id);
@@ -49,7 +51,7 @@ public:
   void init(Context *on_finish);
   void shut_down(Context *on_finish);
 
-  void add_peer(std::string mirror_uuid, librados::IoCtx io_ctx);
+  void add_peer(std::string mirror_uuid);
   void remove_peer(std::string mirror_uuid);
 
   void acquire_image(InstanceWatcher<ImageCtxT> *instance_watcher,
@@ -108,6 +110,7 @@ private:
 
   typedef std::set<Peer> Peers;
 
+  librados::IoCtx &m_ioctx;
   Threads<ImageCtxT> *m_threads;
   std::shared_ptr<ImageDeleter> m_image_deleter;
   RadosRef m_local_rados;

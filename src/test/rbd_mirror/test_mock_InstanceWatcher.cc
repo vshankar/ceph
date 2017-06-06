@@ -81,6 +81,8 @@ struct InstanceReplayer<librbd::MockTestImageCtx> {
                                    const std::string &, Context *));
   MOCK_METHOD5(release_image, void(const std::string &, const std::string &,
                                    const std::string &, bool, Context *));
+  MOCK_METHOD1(add_peer, void(const std::string));
+  MOCK_METHOD1(remove_peer, void(const std::string));
 };
 
 template <>
