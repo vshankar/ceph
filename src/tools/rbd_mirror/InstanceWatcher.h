@@ -71,6 +71,10 @@ public:
                             const std::string &peer_mirror_uuid,
                             const std::string &peer_image_id,
 			    bool schedule_delete, Context *on_notify_ack);
+  void notify_add_peer(const std::string &instance_id,
+                       const std::string &old_peer_mirror_uuid,
+                       const std::string &new_peer_mirror_uuid,
+                       Context *on_notify_ack);
 
   void cancel_notify_requests(const std::string &instance_id);
 
@@ -201,12 +205,18 @@ private:
                             const std::string &peer_mirror_uuid,
                             const std::string &peer_image_id,
                             bool schedule_delete, Context *on_finish);
+  void handle_add_peer(const std::string &old_peer_mirror_uuid,
+                       const std::string &new_peer_mirror_uuid,
+                       Context *on_finish);
 
   void handle_payload(const std::string &instance_id,
                       const instance_watcher::ImageAcquirePayload &payload,
                       C_NotifyAck *on_notify_ack);
   void handle_payload(const std::string &instance_id,
                       const instance_watcher::ImageReleasePayload &payload,
+                      C_NotifyAck *on_notify_ack);
+  void handle_payload(const std::string &instance_id,
+                      const instance_watcher::AddPeerPayload &payload,
                       C_NotifyAck *on_notify_ack);
   void handle_payload(const std::string &instance_id,
                       const instance_watcher::UnknownPayload &payload,

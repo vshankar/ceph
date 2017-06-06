@@ -94,6 +94,24 @@ void ImageReleasePayload::dump(Formatter *f) const {
   f->dump_bool("schedule_delete", schedule_delete);
 }
 
+void AddPeerPayload::encode(bufferlist &bl) const {
+  ::encode(request_id, bl);
+  ::encode(old_peer_mirror_uuid, bl);
+  ::encode(new_peer_mirror_uuid, bl);
+}
+
+void AddPeerPayload::decode(__u8 version, bufferlist::iterator &iter) {
+  ::decode(request_id, iter);
+  ::decode(old_peer_mirror_uuid, iter);
+  ::decode(new_peer_mirror_uuid, iter);
+}
+
+void AddPeerPayload::dump(Formatter *f) const {
+  f->dump_unsigned("request_id", request_id);
+  f->dump_string("old_peer_mirror_uuid", old_peer_mirror_uuid);
+  f->dump_string("new_peer_mirror_uuid", new_peer_mirror_uuid);
+}
+
 void UnknownPayload::encode(bufferlist &bl) const {
   assert(false);
 }
@@ -124,6 +142,9 @@ void NotifyMessage::decode(bufferlist::iterator& iter) {
   case NOTIFY_OP_IMAGE_RELEASE:
     payload = ImageReleasePayload();
     break;
+  case NOTIFY_OP_ADD_PEER:
+    payload = AddPeerPayload();
+    break;
   default:
     payload = UnknownPayload();
     break;
@@ -144,6 +165,9 @@ void NotifyMessage::generate_test_instances(std::list<NotifyMessage *> &o) {
   o.push_back(new NotifyMessage(ImageReleasePayload()));
   o.push_back(new NotifyMessage(ImageReleasePayload(1, "gid", "uuid", "id",
                                                     true)));
+
+  o.push_back(new NotifyMessage(AddPeerPayload()));
+  o.push_back(new NotifyMessage(AddPeerPayload(1, "uuid1", "uuid2")));
 }
 
 std::ostream &operator<<(std::ostream &out, const NotifyOp &op) {
@@ -153,6 +177,9 @@ std::ostream &operator<<(std::ostream &out, const NotifyOp &op) {
     break;
   case NOTIFY_OP_IMAGE_RELEASE:
     out << "ImageRelease";
+    break;
+  case NOTIFY_OP_ADD_PEER:
+    out << "AddPeer";
     break;
   default:
     out << "Unknown (" << static_cast<uint32_t>(op) << ")";

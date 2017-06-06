@@ -24,10 +24,11 @@ using librbd::util::create_context_callback;
 
 template <typename I>
 InstanceReplayer<I>::InstanceReplayer(
-    Threads<I> *threads, std::shared_ptr<ImageDeleter> image_deleter,
+    librados::IoCtx &ioctx, Threads<I> *threads,
+    std::shared_ptr<ImageDeleter> image_deleter,
     ImageSyncThrottlerRef<I> image_sync_throttler, RadosRef local_rados,
     const std::string &local_mirror_uuid, int64_t local_pool_id)
-    : m_threads(threads), m_image_deleter(image_deleter),
+    : m_ioctx(ioctx), m_threads(threads), m_image_deleter(image_deleter),
       m_image_sync_throttler(image_sync_throttler), m_local_rados(local_rados),
       m_local_mirror_uuid(local_mirror_uuid), m_local_pool_id(local_pool_id),
       m_lock("rbd::mirror::InstanceReplayer " + stringify(local_pool_id)) {
@@ -90,12 +91,11 @@ void InstanceReplayer<I>::shut_down(Context *on_finish) {
 }
 
 template <typename I>
-void InstanceReplayer<I>::add_peer(std::string mirror_uuid,
-                                   librados::IoCtx io_ctx) {
+void InstanceReplayer<I>::add_peer(std::string mirror_uuid) {
   dout(20) << mirror_uuid << dendl;
 
   Mutex::Locker locker(m_lock);
-  auto result = m_peers.insert(Peer(mirror_uuid, io_ctx)).second;
+  auto result = m_peers.insert(Peer(mirror_uuid, m_ioctx)).second;
   assert(result);
 }
 

@@ -21,6 +21,7 @@ namespace instance_watcher {
 enum NotifyOp {
   NOTIFY_OP_IMAGE_ACQUIRE  = 0,
   NOTIFY_OP_IMAGE_RELEASE  = 1,
+  NOTIFY_OP_ADD_PEER       = 2,
 };
 
 struct ImagePayloadBase {
@@ -79,6 +80,27 @@ struct ImageReleasePayload : public ImagePayloadBase {
   void dump(Formatter *f) const;
 };
 
+struct AddPeerPayload : public ImagePayloadBase {
+  static const NotifyOp NOTIFY_OP = NOTIFY_OP_ADD_PEER;
+
+  uint64_t request_id;
+  std::string old_peer_mirror_uuid;
+  std::string new_peer_mirror_uuid;
+
+  AddPeerPayload() : request_id(0) {
+  }
+
+  AddPeerPayload(uint64_t request_id, const std::string &old_peer_mirror_uuid,
+                 const std::string &new_peer_mirror_uuid)
+    : request_id(request_id), old_peer_mirror_uuid(old_peer_mirror_uuid),
+      new_peer_mirror_uuid(new_peer_mirror_uuid) {
+  }
+
+  void encode(bufferlist &bl) const;
+  void decode(__u8 version, bufferlist::iterator &iter);
+  void dump(Formatter *f) const;
+};
+
 struct UnknownPayload {
   static const NotifyOp NOTIFY_OP = static_cast<NotifyOp>(-1);
 
@@ -92,6 +114,7 @@ struct UnknownPayload {
 
 typedef boost::variant<ImageAcquirePayload,
                        ImageReleasePayload,
+                       AddPeerPayload,
                        UnknownPayload> Payload;
 
 struct NotifyMessage {

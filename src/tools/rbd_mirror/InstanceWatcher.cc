@@ -348,6 +348,31 @@ void InstanceWatcher<I>::notify_image_release(
   }
 }
 
+template<typename I>
+void InstanceWatcher<I>::notify_add_peer(
+  const std::string &instance_id, const std::string &old_peer_mirror_uuid,
+  const std::string &new_peer_mirror_uuid, Context *on_notify_ack) {
+  dout(20) << "instance_id=" << instance_id << ", old_peer_mirror_uuid="
+           << old_peer_mirror_uuid << ", new_peer_mirror_uuid="
+           << new_peer_mirror_uuid << dendl;
+
+  Mutex::Locker locker(m_lock);
+
+  assert(m_on_finish == nullptr);
+
+  if (instance_id == m_instance_id) {
+    handle_add_peer(old_peer_mirror_uuid, new_peer_mirror_uuid, on_notify_ack);
+  } else {
+    uint64_t request_id = ++m_request_seq;
+    bufferlist bl;
+    ::encode(NotifyMessage{AddPeerPayload{request_id, old_peer_mirror_uuid,
+            new_peer_mirror_uuid}}, bl);
+    auto req = new C_NotifyInstanceRequest(this, instance_id, request_id,
+                                           std::move(bl), on_notify_ack);
+    req->send();
+  }
+}
+
 template <typename I>
 void InstanceWatcher<I>::cancel_notify_requests(
     const std::string &instance_id) {
@@ -800,6 +825,18 @@ void InstanceWatcher<I>::handle_image_release(
 }
 
 template <typename I>
+void InstanceWatcher<I>::handle_add_peer(const std::string &old_peer_mirror_uuid,
+                                         const std::string &new_peer_mirror_uuid,
+                                         Context *on_finish) {
+  dout(20) << "old_peer_mirror_uuid=" << old_peer_mirror_uuid
+           << ", new_peer_mirror_uuid=" << new_peer_mirror_uuid << dendl;
+
+  m_instance_replayer->remove_peer(old_peer_mirror_uuid);
+  m_instance_replayer->add_peer(new_peer_mirror_uuid);
+  on_finish->complete(0);
+}
+
+template <typename I>
 void InstanceWatcher<I>::handle_payload(const std::string &instance_id,
                                         const ImageAcquirePayload &payload,
                                         C_NotifyAck *on_notify_ack) {
@@ -827,6 +864,21 @@ void InstanceWatcher<I>::handle_payload(const std::string &instance_id,
     handle_image_release(payload.global_image_id, payload.peer_mirror_uuid,
                          payload.peer_image_id, payload.schedule_delete,
                          on_finish);
+  }
+}
+
+template<typename I>
+void InstanceWatcher<I>::handle_payload(const std::string &instance_id,
+                                        const AddPeerPayload &payload,
+                                        C_NotifyAck *on_notify_ack) {
+  dout(20) << "add peer: instance_id=" << instance_id << ", "
+           << "request_id=" << payload.request_id << dendl;
+
+  auto on_finish = prepare_request(instance_id, payload.request_id,
+                                   on_notify_ack);
+  if (on_finish != nullptr) {
+    handle_add_peer(payload.old_peer_mirror_uuid,
+                    payload.new_peer_mirror_uuid, on_finish);
   }
 }
 
