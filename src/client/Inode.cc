@@ -242,6 +242,9 @@ void Inode::try_touch_cap(mds_rank_t mds)
  */
 bool Inode::caps_issued_mask(unsigned mask, bool allow_impl)
 {
+  MetaSession *session = get_session();
+  ceph_assert(session != nullptr);
+
   int c = snap_caps;
   int i = 0;
 
@@ -252,6 +255,7 @@ bool Inode::caps_issued_mask(unsigned mask, bool allow_impl)
       cap_is_valid(*auth_cap) &&
       (auth_cap->issued & mask) == mask) {
     auth_cap->touch();
+    session->cap_hit();
     return true;
   }
   // try any cap
@@ -260,6 +264,7 @@ bool Inode::caps_issued_mask(unsigned mask, bool allow_impl)
     if (cap_is_valid(cap)) {
       if ((cap.issued & mask) == mask) {
         cap.touch();
+        session->cap_hit();
 	return true;
       }
       c |= cap.issued;
@@ -274,9 +279,12 @@ bool Inode::caps_issued_mask(unsigned mask, bool allow_impl)
     // bah.. touch them all
     for (auto &pair : caps) {
       pair.second.touch();
+      session->cap_hit();
     }
     return true;
   }
+
+  session->cap_miss();
   return false;
 }
 

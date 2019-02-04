@@ -55,6 +55,22 @@ struct MetaSession {
 
   ceph::ref_t<MClientCapRelease> release;
 
+  uint64_t cap_hits = 0;
+  uint64_t cap_misses = 0;
+
+  inline void cap_hit() {
+    ++cap_hits;
+  }
+  inline void cap_miss() {
+    ++cap_misses;
+  }
+  inline std::pair<uint64_t, uint64_t> get_cap_hit_rates() {
+    return std::make_pair(cap_hits, cap_misses);
+  }
+  inline void reset_cap_hit_rates() {
+    cap_hits = cap_misses = 0;
+  }
+
   MetaSession(mds_rank_t mds_num, ConnectionRef con, const entity_addrvec_t& addrs)
     : mds_num(mds_num), con(con), addrs(addrs) {
   }
