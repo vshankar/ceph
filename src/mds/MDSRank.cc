@@ -20,6 +20,7 @@
 #include "messages/MClientRequestForward.h"
 #include "messages/MMDSLoadTargets.h"
 #include "messages/MMDSTableRequest.h"
+#include "messages/MMDSMetrics.h"
 
 #include "mgr/MgrClient.h"
 
@@ -1178,6 +1179,7 @@ bool MDSRank::handle_deferrable_message(const cref_t<Message> &m)
       ALLOW_MESSAGES_FROM(CEPH_ENTITY_TYPE_CLIENT);
       // fall-thru
     case CEPH_MSG_CLIENT_REQUEST:
+    case CEPH_MSG_CLIENT_METRICS:
       server->dispatch(m);
       break;
     case MSG_MDS_SLAVE_REQUEST:

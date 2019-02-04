@@ -191,7 +191,8 @@ Server::Server(MDSRank *m) :
   failed_reconnects(0),
   reconnect_evicting(false),
   terminating_sessions(false),
-  recall_throttle(g_conf().get_val<double>("mds_recall_max_decay_rate"))
+  recall_throttle(g_conf().get_val<double>("mds_recall_max_decay_rate")),
+  metrics_handler(m)
 {
   cap_revoke_eviction_timeout = g_conf().get_val<double>("mds_cap_revoke_eviction_timeout");
   supported_features = feature_bitset_t(CEPHFS_FEATURES_MDS_SUPPORTED);
@@ -267,6 +268,9 @@ void Server::dispatch(const cref_t<Message> &m)
   case CEPH_MSG_CLIENT_RECLAIM:
     handle_client_reclaim(ref_cast<MClientReclaim>(m));
     return;
+  case CEPH_MSG_CLIENT_METRICS:
+    handle_client_metrics(ref_cast<MClientMetrics>(m));
+    break;
   case MSG_MDS_SLAVE_REQUEST:
     handle_slave_request(ref_cast<MMDSSlaveRequest>(m));
     return;
@@ -583,8 +587,10 @@ void Server::handle_client_session(const cref_t<MClientSession> &m)
 	}
       }
 
-      if (session->is_closed())
-	mds->sessionmap.add_session(session);
+      if (session->is_closed()) {
+        mds->sessionmap.add_session(session);
+        metrics_handler.add_session(session);
+      }
 
       pv = mds->sessionmap.mark_projected(session);
       sseq = mds->sessionmap.set_state(session, Session::STATE_OPENING);
@@ -644,6 +650,7 @@ void Server::handle_client_session(const cref_t<MClientSession> &m)
 			  << session->get_push_seq() << ", dropping" << " from client : " << session->get_human_name();
 	return;
       }
+      metrics_handler.remove_session(session);
       journal_close_session(session, Session::STATE_CLOSING, NULL);
     }
     break;
@@ -659,6 +666,20 @@ void Server::handle_client_session(const cref_t<MClientSession> &m)
 
   default:
     ceph_abort();
+  }
+}
+
+void Server::handle_client_metrics(const cref_t<MClientMetrics> &m) {
+    Session *session = mds->get_session(m);
+    dout(20) << __func__ << ": session=" << session << dendl;
+
+    if (session == nullptr) {
+      dout(10) << __func__ << ": ignoring session less message" << dendl;
+      return;
+    }
+
+    for (auto &metric : m->updates) {
+      boost::apply_visitor(HandlePayloadVisitor(&metrics_handler, session), metric.payload);
   }
 }
 
@@ -1208,6 +1229,7 @@ void Server::reconnect_clients(MDSContext *reconnect_done_)
     if (session->is_open()) {
       client_reconnect_gather.insert(session->get_client());
       session->last_cap_renew = now;
+      metrics_handler.add_session(session);
     }
   }
 

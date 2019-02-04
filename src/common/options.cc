@@ -8190,6 +8190,11 @@ std::vector<Option> get_mds_options() {
      .set_default(2.0)
      .set_description("task status update interval to manager")
      .set_long_description("interval (in seconds) for sending mds task status to ceph manager"),
+
+    Option("mds_metrics_update_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(2.0)
+    .set_description("interval in seconds for metrics data update.")
+      .set_long_description("interval in seconds after which active MDSs send client metrics data to rank 0."),
   });
 }
 

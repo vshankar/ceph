@@ -39,6 +39,7 @@ set(mds_srcs
   Mantle.cc
   Anchor.cc
   OpenFileTable.cc
+  MetricsHandler.cc
   metrics/client/Types.cc
   MetricAggregator.cc
   ${CMAKE_SOURCE_DIR}/src/common/TrackedOp.cc

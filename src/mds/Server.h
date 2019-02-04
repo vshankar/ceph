@@ -16,6 +16,7 @@
 #define CEPH_MDS_SERVER_H
 
 #include <string_view>
+#include <boost/variant.hpp>
 
 #include <common/DecayCounter.h>
 
@@ -26,11 +27,13 @@
 #include "messages/MClientSnap.h"
 #include "messages/MClientReclaim.h"
 #include "messages/MClientReclaimReply.h"
+#include "messages/MClientMetrics.h"
 #include "messages/MLock.h"
 
 #include "MDSRank.h"
 #include "Mutation.h"
 #include "MDSContext.h"
+#include "MetricsHandler.h"
 
 class OSDMap;
 class PerfCounters;
@@ -158,6 +161,7 @@ public:
   void reclaim_session(Session *session, const cref_t<MClientReclaim> &m);
   void finish_reclaim_session(Session *session, const ref_t<MClientReclaimReply> &reply=nullptr);
   void handle_client_reclaim(const cref_t<MClientReclaim> &m);
+  void handle_client_metrics(const cref_t<MClientMetrics> &m);
 
   void reconnect_clients(MDSContext *reconnect_done_);
   void handle_client_reconnect(const cref_t<MClientReconnect> &m);
@@ -351,6 +355,22 @@ private:
 
   DecayCounter recall_throttle;
   time last_recall_state;
+
+  MetricsHandler metrics_handler;
+
+  struct HandlePayloadVisitor : public boost::static_visitor<void> {
+    MetricsHandler *metrics_handler;
+    Session *session;
+
+    HandlePayloadVisitor(MetricsHandler *metrics_handler, Session *session)
+      : metrics_handler(metrics_handler), session(session) {
+    }
+
+    template <typename ClientMetricPayload>
+    inline void operator()(const ClientMetricPayload &payload) const {
+      metrics_handler->handle_payload(session, payload);
+    }
+  };
 };
 
 #endif
