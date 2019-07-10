@@ -30,6 +30,7 @@
 #include "include/unordered_map.h"
 #include "include/unordered_set.h"
 #include "mds/mdstypes.h"
+#include "mds/metrics/client/Types.h"
 #include "msg/Dispatcher.h"
 #include "msg/MessageRef.h"
 #include "msg/Messenger.h"
@@ -1192,6 +1193,9 @@ private:
   int _lookup_name(Inode *in, Inode *parent, const UserPerm& perms);
   int _lookup_ino(inodeno_t ino, const UserPerm& perms, Inode **inode=NULL);
   bool _ll_forget(Inode *in, uint64_t count);
+
+  void collect_and_send_metrics();
+  ClientMetricMessage collect_cap_metric(MetaSession &session);
 
 
   uint32_t deleg_timeout = 0;
