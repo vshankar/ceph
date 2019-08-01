@@ -263,6 +263,12 @@ def open_filesystem(fsc, fs_name):
     finally:
         fsc.connection_pool.put_fs_handle(fs_name)
 
+    def get_metadata_pool(self, fs_name):
+        fs = self.get_fs(fs_name)
+        if fs:
+            return fs['mdsmap']['metadata_pool']
+        return None
+
 
 def colorize(msg, color, dark=False):
     """
