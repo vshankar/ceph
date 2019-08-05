@@ -26,6 +26,7 @@
 #include "common/errno.h"
 #include "common/version.h"
 
+#include "mgr/Types.h"
 #include "BaseMgrModule.h"
 #include "Gil.h"
 
@@ -984,7 +985,7 @@ ceph_add_osd_perf_query(BaseMgrModule *self, PyObject *args)
 static PyObject*
 ceph_remove_osd_perf_query(BaseMgrModule *self, PyObject *args)
 {
-  OSDPerfMetricQueryID query_id;
+  MetricQueryID query_id;
   if (!PyArg_ParseTuple(args, "i:ceph_remove_osd_perf_query", &query_id)) {
     derr << "Invalid args!" << dendl;
     return nullptr;
@@ -997,7 +998,7 @@ ceph_remove_osd_perf_query(BaseMgrModule *self, PyObject *args)
 static PyObject*
 ceph_get_osd_perf_counters(BaseMgrModule *self, PyObject *args)
 {
-  OSDPerfMetricQueryID query_id;
+  MetricQueryID query_id;
   if (!PyArg_ParseTuple(args, "i:ceph_get_osd_perf_counters", &query_id)) {
     derr << "Invalid args!" << dendl;
     return nullptr;
