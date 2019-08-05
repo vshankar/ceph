@@ -186,3 +186,5 @@ void MetricCollector<Query, Limit, Key, Report>::process_reports_generic(
 
 template class
 MetricCollector<OSDPerfMetricQuery, OSDPerfMetricLimit, OSDPerfMetricKey, OSDPerfMetricReport>;
+template class
+MetricCollector<MDSPerfMetricQuery, MDSPerfMetricLimit, MDSPerfMetricKey, MDSPerfMetrics>;
