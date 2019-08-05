@@ -114,6 +114,7 @@ class SnapClient;
 class MDSTableServer;
 class MDSTableClient;
 class Messenger;
+class MgrClient;
 class Objecter;
 class MonClient;
 class MgrClient;
@@ -185,7 +186,6 @@ class MDSRank {
     MDBalancer   *balancer;
     ScrubStack   *scrubstack;
     DamageTable  damage_table;
-
 
     InoTable     *inotable;
 

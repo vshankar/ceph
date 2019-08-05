@@ -1,0 +1,64 @@
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
+// vim: ts=8 sw=2 smarttab
+
+#ifndef CEPH_MDS_METRIC_AGGREGATOR_H
+#define CEPH_MDS_METRIC_AGGREGATOR_H
+
+#include <map>
+
+#include "include/spinlock.h"
+
+#include "msg/Dispatcher.h"
+#include "messages/MMDSMetrics.h"
+
+#include "mgr/MDSPerfMetricTypes.h"
+
+#include "mdstypes.h"
+
+class MgrClient;
+class CephContext;
+
+class MetricAggregator : public Dispatcher {
+public:
+  MetricAggregator(CephContext *cct, MgrClient *mgrc);
+
+  int init();
+  void shutdown();
+
+  bool ms_can_fast_dispatch_any() const override {
+    return true;
+  }
+  bool ms_can_fast_dispatch2(const cref_t<Message> &m) const override;
+  void ms_fast_dispatch2(const ref_t<Message> &m) override;
+  bool ms_dispatch2(const ref_t<Message> &m) override;
+
+  void ms_handle_connect(Connection *c) override {
+  }
+  bool ms_handle_reset(Connection *c) override {
+    return false;
+  }
+  void ms_handle_remote_reset(Connection *c) override {
+  }
+  bool ms_handle_refused(Connection *c) override {
+    return false;
+  }
+
+private:
+  ceph::spinlock lock;
+  MgrClient *mgrc;
+
+  // maintain a map of rank to list of clients so that when a rank
+  // goes away we cull metrics of clients connected to that rank.
+  std::map<mds_rank_t, std::unordered_set<entity_inst_t>> clients_by_rank;
+
+  // user query to metrics map
+  std::map<MDSPerfMetricQuery, std::map<MDSPerfMetricKey, PerformanceCounters>> query_metrics_map;
+
+  void handle_mds_metrics(const cref_t<MMDSMetrics> &m);
+
+  void refresh_metrics_for_rank(const entity_inst_t &client, mds_rank_t rank,
+                                const Metrics &metrics);
+  void remove_metrics_for_rank(const entity_inst_t &client, mds_rank_t rank, bool remove);
+};
+
+#endif // CEPH_MDS_METRIC_AGGREGATOR_H
