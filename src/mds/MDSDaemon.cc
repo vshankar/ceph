@@ -41,6 +41,7 @@
 #include "MDSDaemon.h"
 #include "Server.h"
 #include "Locker.h"
+#include "MetricAggregator.h"
 
 #include "SnapServer.h"
 #include "SnapClient.h"
@@ -877,6 +878,14 @@ void MDSDaemon::handle_mds_map(const cref_t<MMDSMap> &m)
       dout(10) <<  __func__ << ": initializing MDS rank "
                << mds_rank->get_nodeid() << dendl;
       mds_rank->init();
+
+      // metric aggregation is solely done by rank 0
+      if (mds_rank->get_nodeid() == (mds_rank_t)0) {
+        dout(10) << __func__ << ": initializing metric aggregator" << dendl;
+        metric_aggregator = new MetricAggregator(cct, &mgrc);
+        metric_aggregator->init();
+        messenger->add_dispatcher_tail(metric_aggregator);
+      }
     }
 
     // MDSRank is active: let him process the map, we have no say.
@@ -959,6 +968,9 @@ void MDSDaemon::suicide()
   mgrc.shutdown();
 
   if (mds_rank) {
+    if (metric_aggregator != nullptr) {
+      metric_aggregator->shutdown();
+    }
     mds_rank->shutdown();
   } else {
     timer.shutdown();

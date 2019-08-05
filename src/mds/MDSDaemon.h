@@ -39,6 +39,7 @@
 
 class Messenger;
 class MonClient;
+class MetricAggregator;
 
 class MDSDaemon : public Dispatcher {
  public:
@@ -73,6 +74,7 @@ class MDSDaemon : public Dispatcher {
   LogChannelRef clog;
 
   MDSRankDispatcher *mds_rank;
+  MetricAggregator *metric_aggregator = nullptr;
 
  public:
   MDSDaemon(std::string_view n, Messenger *m, MonClient *mc);
