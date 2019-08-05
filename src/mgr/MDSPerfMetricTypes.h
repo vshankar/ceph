@@ -13,6 +13,8 @@
 
 #include "mgr/Types.h"
 
+#include "mds/mdstypes.h"
+
 typedef std::vector<std::string> MDSPerfMetricSubKey; // array of regex match
 typedef std::vector<MDSPerfMetricSubKey> MDSPerfMetricKey;
 
