@@ -232,6 +232,20 @@ struct Inode {
   std::list<ceph::condition_variable*> waitfor_commit;
   std::list<ceph::condition_variable*> waitfor_deleg;
 
+  MetaSession *get_session() {
+    MetaSession *session = nullptr;
+    if (auth_cap) {
+      session = auth_cap->session;
+    } else {
+      auto iter = caps.begin();
+      if (iter != caps.end()) {
+        session = iter->second.session;
+      }
+    }
+
+    return session;
+  }
+
   Dentry *get_first_parent() {
     ceph_assert(!dentries.empty());
     return *dentries.begin();
