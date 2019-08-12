@@ -23,8 +23,11 @@ public:
   void handle_payload(Session *session, const ReadWriteIOPSPayload &payload);
   void handle_payload(Session *session, const UnknownPayload &payload);
 
+  void set_next_seq(version_t seq);
+
 private:
   MDSRank *mds;
+  version_t next_seq = 0;
   Context *timer_task = nullptr;
   std::map<entity_inst_t, Metrics> client_metrics_map;
 

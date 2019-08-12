@@ -40,6 +40,7 @@ set(mds_srcs
   Anchor.cc
   OpenFileTable.cc
   MetricsHandler.cc
+  MDSPinger.cc
   metrics/client/Types.cc
   MetricAggregator.cc
   ${CMAKE_SOURCE_DIR}/src/common/TrackedOp.cc

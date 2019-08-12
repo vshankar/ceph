@@ -274,6 +274,9 @@ void Server::dispatch(const cref_t<Message> &m)
   case MSG_MDS_SLAVE_REQUEST:
     handle_slave_request(ref_cast<MMDSSlaveRequest>(m));
     return;
+  case MSG_MDS_PING:
+    handle_mds_ping(ref_cast<MMDSPing>(m));
+    break;
   default:
     derr << "server unknown message " << m->get_type() << dendl;
     ceph_abort_msg("server unknown message");  
@@ -683,6 +686,9 @@ void Server::handle_client_metrics(const cref_t<MClientMetrics> &m) {
   }
 }
 
+void Server::handle_mds_ping(const cref_t<MMDSPing> &m) {
+  metrics_handler.set_next_seq(m->seq);
+}
 
 void Server::flush_session(Session *session, MDSGatherBuilder *gather) {
   if (!session->is_open() ||

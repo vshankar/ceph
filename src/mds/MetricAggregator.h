@@ -5,6 +5,8 @@
 #define CEPH_MDS_METRIC_AGGREGATOR_H
 
 #include <map>
+#include <set>
+#include <thread>
 
 #include "include/spinlock.h"
 
@@ -14,16 +16,21 @@
 #include "mgr/MDSPerfMetricTypes.h"
 
 #include "mdstypes.h"
+#include "MDSMap.h"
+#include "MDSPinger.h"
 
+class MDSRank;
 class MgrClient;
 class CephContext;
 
 class MetricAggregator : public Dispatcher {
 public:
-  MetricAggregator(CephContext *cct, MgrClient *mgrc);
+  MetricAggregator(CephContext *cct, MDSRank *mds, MgrClient *mgrc);
 
   int init();
   void shutdown();
+
+  void notify_mdsmap(const MDSMap &mdsmap);
 
   bool ms_can_fast_dispatch_any() const override {
     return true;
@@ -54,11 +61,22 @@ private:
   // user query to metrics map
   std::map<MDSPerfMetricQuery, std::map<MDSPerfMetricKey, PerformanceCounters>> query_metrics_map;
 
+  MDSPinger mds_pinger;
+  std::thread pinger;
+
+  std::set<mds_rank_t> active;
+
+  bool stopping = false;
+
   void handle_mds_metrics(const cref_t<MMDSMetrics> &m);
 
   void refresh_metrics_for_rank(const entity_inst_t &client, mds_rank_t rank,
                                 const Metrics &metrics);
   void remove_metrics_for_rank(const entity_inst_t &client, mds_rank_t rank, bool remove);
+
+  void cull_metrics_for_rank(mds_rank_t rank);
+
+  void ping_all_active_ranks();
 };
 
 #endif // CEPH_MDS_METRIC_AGGREGATOR_H

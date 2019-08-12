@@ -28,6 +28,7 @@
 #include "messages/MClientReclaim.h"
 #include "messages/MClientReclaimReply.h"
 #include "messages/MClientMetrics.h"
+#include "messages/MMDSPing.h"
 #include "messages/MLock.h"
 
 #include "MDSRank.h"
@@ -162,6 +163,7 @@ public:
   void finish_reclaim_session(Session *session, const ref_t<MClientReclaimReply> &reply=nullptr);
   void handle_client_reclaim(const cref_t<MClientReclaim> &m);
   void handle_client_metrics(const cref_t<MClientMetrics> &m);
+  void handle_mds_ping(const cref_t<MMDSPing> &m);
 
   void reconnect_clients(MDSContext *reconnect_done_);
   void handle_client_reconnect(const cref_t<MClientReconnect> &m);
