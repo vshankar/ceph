@@ -159,28 +159,32 @@ struct Metrics {
 };
 
 struct MetricsMessage {
+  version_t seq = 0;
   mds_rank_t rank = MDS_RANK_NONE;
   std::map<entity_inst_t, Metrics> client_metrics_map;
 
   MetricsMessage() {
   }
-  MetricsMessage(mds_rank_t rank)
-    : rank(rank) {
+  MetricsMessage(version_t seq, mds_rank_t rank)
+    : seq(seq), rank(rank) {
   }
 
   void encode(bufferlist &bl, uint64_t features) const {
     using ceph::encode;
+    encode(seq, bl);
     encode(rank, bl);
     encode(client_metrics_map, bl, features);
   }
 
   void decode(bufferlist::const_iterator &iter) {
     using ceph::decode;
+    decode(seq, iter);
     decode(rank, iter);
     decode(client_metrics_map, iter);
   }
 
   void dump(Formatter *f) const {
+    f->dump_unsigned("seq", seq);
     f->dump_int("rank", rank);
     for (auto &p : client_metrics_map) {
       f->dump_stream("client") << p.first;
@@ -189,8 +193,8 @@ struct MetricsMessage {
   }
 
   friend std::ostream& operator<<(std::ostream& os, const MetricsMessage& metrics_message) {
-    os << "[rank=" << metrics_message.rank << ", metrics=" << metrics_message.client_metrics_map
-       << "]";
+    os << "[sequence=" << metrics_message.seq << ", rank=" << metrics_message.rank
+       << ", metrics=" << metrics_message.client_metrics_map << "]";
     return os;
   }
 };

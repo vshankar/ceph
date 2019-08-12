@@ -1212,6 +1212,11 @@ bool MDSRank::handle_deferrable_message(const cref_t<Message> &m)
       locker->dispatch(m);
       break;
 
+    case MSG_MDS_PING:
+      ALLOW_MESSAGES_FROM(CEPH_ENTITY_TYPE_MDS);
+      server->dispatch(m);
+      break;
+
     case CEPH_MSG_CLIENT_CAPS:
     case CEPH_MSG_CLIENT_CAPRELEASE:
     case CEPH_MSG_CLIENT_LEASE:

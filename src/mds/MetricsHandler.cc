@@ -45,6 +45,11 @@ void MetricsHandler::remove_session(Session *session) {
   metrics.update_type = UPDATE_TYPE_REMOVE;
 }
 
+void MetricsHandler::set_next_seq(version_t  seq) {
+  ceph_assert(ceph_mutex_is_locked_by_me(mds->mds_lock));
+  dout(10) << ": current sequence number " << next_seq << ", setting next sequence number "
+           << seq << dendl;
+  next_seq = seq;
 }
 
 void MetricsHandler::handle_payload(Session *session, const CapInfoPayload &payload) {
@@ -99,7 +104,7 @@ void MetricsHandler::update_rank0() {
   ceph_assert(timer_task == nullptr);
   ceph_assert(ceph_mutex_is_locked_by_me(mds->mds_lock));
 
-  MetricsMessage metrics_message(mds->get_nodeid());
+  MetricsMessage metrics_message(next_seq, mds->get_nodeid());
   auto &update_client_metrics_map = metrics_message.client_metrics_map;
 
   for (auto p = client_metrics_map.begin(); p != client_metrics_map.end();) {
@@ -113,7 +118,7 @@ void MetricsHandler::update_rank0() {
   }
 
   dout(20) << ": sending metric updates for " << update_client_metrics_map.size()
-           << " clients to rank 0" << dendl;
+           << " clients to rank 0 with sequence number " << next_seq << dendl;
   mds->send_message_mds(make_message<MMDSMetrics>(metrics_message), (mds_rank_t)0);
 
   schedule_update();

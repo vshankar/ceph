@@ -882,7 +882,7 @@ void MDSDaemon::handle_mds_map(const cref_t<MMDSMap> &m)
       // metric aggregation is solely done by rank 0
       if (mds_rank->get_nodeid() == (mds_rank_t)0) {
         dout(10) << __func__ << ": initializing metric aggregator" << dendl;
-        metric_aggregator = new MetricAggregator(cct, &mgrc);
+        metric_aggregator = new MetricAggregator(cct, mds_rank, &mgrc);
         metric_aggregator->init();
         messenger->add_dispatcher_tail(metric_aggregator);
       }
@@ -896,6 +896,9 @@ void MDSDaemon::handle_mds_map(const cref_t<MMDSMap> &m)
 
 out:
   beacon.notify_mdsmap(*mdsmap);
+  if (metric_aggregator != nullptr) {
+    metric_aggregator->notify_mdsmap(*mdsmap);
+  }
 }
 
 void MDSDaemon::_handle_mds_map(const MDSMap &mdsmap)

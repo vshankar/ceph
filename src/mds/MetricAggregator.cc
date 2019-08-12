@@ -9,18 +9,52 @@
 #undef dout_prefix
 #define dout_prefix *_dout << "mds.metric.aggregator" << " " << __func__
 
-MetricAggregator::MetricAggregator(CephContext *cct, MgrClient *mgrc)
+MetricAggregator::MetricAggregator(CephContext *cct, MDSRank *mds, MgrClient *mgrc)
   : Dispatcher(cct),
-    mgrc(mgrc) {
+    mgrc(mgrc),
+    mds_pinger(mds) {
+}
+
+void MetricAggregator::ping_all_active_ranks() {
+  dout(10) << ": pinging " << active.size() << " active mds(s)" << dendl;
+
+  for (auto &rank : active) {
+    dout(20) << ": pinging rank=" << rank << dendl;
+    mds_pinger.send_ping(rank);
+  }
 }
 
 int MetricAggregator::init() {
   dout(20) << dendl;
+
+  std::scoped_lock locker(lock);
+
+  pinger = std::thread([this]() {
+      lock.lock();
+      while (!stopping) {
+        ping_all_active_ranks();
+        lock.unlock();
+        double timo = g_conf().get_val<double>("mds_ping_interval");
+        sleep(timo);
+        lock.lock();
+      }
+    });
+
   return 0;
 }
 
 void MetricAggregator::shutdown() {
   dout(20) << dendl;
+
+  {
+    std::scoped_lock locker(lock);
+    ceph_assert(!stopping);
+    stopping = true;
+  }
+
+  if (pinger.joinable()) {
+    pinger.join();
+  }
 }
 
 bool MetricAggregator::ms_can_fast_dispatch2(const cref_t<Message> &m) const {
@@ -185,13 +219,18 @@ void MetricAggregator::remove_metrics_for_rank(const entity_inst_t &client,
 void MetricAggregator::handle_mds_metrics(const cref_t<MMDSMetrics> &m) {
   const MetricsMessage &metrics_message = m->metrics_message;
 
+  auto seq = metrics_message.seq;
   auto rank = metrics_message.rank;
   auto &client_metrics_map = metrics_message.client_metrics_map;
 
   dout(20) << ": applying " << client_metrics_map.size() << " updates for rank="
-           << rank << dendl;
+           << rank << " with sequence number " << seq << dendl;
 
   std::scoped_lock locker(lock);
+
+  if (!mds_pinger.pong_received(rank, seq)) {
+    return;
+  }
 
   for (auto &p : client_metrics_map) {
     auto &client = p.first;
@@ -208,4 +247,50 @@ void MetricAggregator::handle_mds_metrics(const cref_t<MMDSMetrics> &m) {
       ceph_abort();
     }
   }
+}
+
+void MetricAggregator::cull_metrics_for_rank(mds_rank_t rank) {
+  dout(20) << ": rank=" << rank << dendl;
+
+  auto p = clients_by_rank.find(rank);
+  ceph_assert(p != clients_by_rank.end());
+
+  for (auto &client : p->second) {
+    remove_metrics_for_rank(client, p->first, false);
+  }
+
+  dout(10) << ": culled " << p->second.size() << " clients" << dendl;
+  clients_by_rank.erase(p);
+}
+
+void MetricAggregator::notify_mdsmap(const MDSMap &mdsmap) {
+  dout(10) << dendl;
+
+  std::scoped_lock locker(lock);
+
+  std::set<mds_rank_t> current_active;
+  mdsmap.get_active_mds_set(current_active);
+
+  std::set<mds_rank_t> diff;
+  std::set_difference(active.begin(), active.end(),
+                      current_active.begin(), current_active.end(),
+                      std::inserter(diff, diff.end()));
+
+  for (auto &rank : diff) {
+    active.erase(rank);
+    cull_metrics_for_rank(rank);
+    mds_pinger.reset_ping(rank);
+  }
+
+  diff.clear();
+  std::set_difference(current_active.begin(), current_active.end(),
+                      active.begin(), active.end(),
+                      std::inserter(diff, diff.end()));
+
+  for (auto &rank : diff) {
+    active.insert(rank);
+    clients_by_rank.emplace(rank, std::unordered_set<entity_inst_t>{});
+  }
+
+  dout(10) << ": active set=["  << active << "]" << dendl;
 }
