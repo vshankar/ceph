@@ -510,8 +510,7 @@ bool DaemonServer::handle_open(const ref_t<MMgrOpen>& m)
 	     << " bytes" << dendl;
   }
 
-  if (con->get_peer_type() != entity_name_t::TYPE_CLIENT &&
-      m->service_name.empty())
+  if (con->get_peer_type() != entity_name_t::TYPE_CLIENT)
   {
     // Store in set of the daemon/service connections, i.e. those
     // connections that require an update in the event of stats
