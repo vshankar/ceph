@@ -1417,3 +1417,44 @@ class Filesystem(MDSCluster):
 
     def is_full(self):
         return self.is_pool_full(self.get_data_pool_name())
+
+    def grow(self, new_max_mds):
+        fscid = self.id
+        fs_status = self.status()
+        log.info("status={0}".format(fs_status))
+
+        original_ranks = set([info['gid'] for info in fs_status.get_ranks(fscid)])
+        _ = set([info['gid'] for info in fs_status.get_standbys()])
+
+        oldmax = self.get_var('max_mds')
+        assert(new_max_mds > oldmax)
+        self.set_max_mds(new_max_mds)
+
+        grace = float(self.get_config("mds_beacon_grace", service_type="mon"))
+
+        log.info("Waiting for cluster to grow.")
+        fs_status = self.wait_for_daemons(timeout=60+grace*2)
+        ranks = set([info['gid'] for info in fs_status.get_ranks(fscid)])
+        assert(original_ranks.issubset(ranks) and len(ranks) == new_max_mds)
+        return fs_status
+
+    def shrink(self, new_max_mds):
+        fscid = self.id
+        fs_status = self.status()
+        log.info("status={0}".format(fs_status))
+
+        original_ranks = set([info['gid'] for info in fs_status.get_ranks(fscid)])
+        _ = set([info['gid'] for info in fs_status.get_standbys()])
+
+        oldmax = self.get_var('max_mds')
+        assert(new_max_mds < oldmax)
+        self.set_max_mds(new_max_mds)
+
+        grace = float(self.get_config("mds_beacon_grace", service_type="mon"))
+
+        # Wait until the monitor finishes stopping ranks >= new_max_mds
+        log.info("Waiting for cluster to shink.")
+        fs_status = self.wait_for_daemons(timeout=60+grace*2)
+        ranks = set([info['gid'] for info in fs_status.get_ranks(fscid)])
+        assert(ranks.issubset(original_ranks) and len(ranks) == new_max_mds)
+        return fs_status
