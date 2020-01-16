@@ -7,8 +7,9 @@ import cephfs
 import errno
 import rados
 from contextlib import contextmanager
-from mgr_util import CephfsClient, CephfsConnectionException, connection_pool_wrap
-from datetime import datetime, timedelta
+from mgr_util import CephfsClient, CephfsConnectionException, \
+        connection_pool_wrap
+from datetime import datetime
 from threading import Timer
 import sqlite3
 
@@ -95,7 +96,6 @@ class SnapSchedClient(CephfsClient):
     CREATE_TABLES = '''CREATE TABLE schedules(
         id integer PRIMARY KEY ASC,
         path text NOT NULL UNIQUE,
-        schedule text NOT NULL,
         subvol text,
         rel_path text NOT NULL,
         active int NOT NULL
@@ -105,8 +105,10 @@ class SnapSchedClient(CephfsClient):
         schedule_id int,
         start bigint NOT NULL,
         repeat bigint NOT NULL,
+        schedule text NOT NULL,
         retention text,
-        FOREIGN KEY(schedule_id) REFERENCES schedules(id) ON DELETE CASCADE
+        FOREIGN KEY(schedule_id) REFERENCES schedules(id) ON DELETE CASCADE,
+        UNIQUE (start, repeat)
     );'''
 
     def __init__(self, mgr):
@@ -151,8 +153,9 @@ class SnapSchedClient(CephfsClient):
                 pool = self.get_metadata_pool(fs)
                 with open_ioctx(self, pool) as ioctx:
                     try:
-                        size, _mtime = ioctx.stat('SNAP_DB_OBJECT_NAME')
-                        db = ioctx.read('SNAP_DB_OBJECT_NAME', size).decode('utf-8')
+                        size, _mtime = ioctx.stat(SNAP_DB_OBJECT_NAME)
+                        db = ioctx.read(SNAP_DB_OBJECT_NAME,
+                                        size).decode('utf-8')
                         con.executescript(db)
                     except rados.ObjectNotFound:
                         self.log.info(f'No schedule DB found in {fs}')
@@ -167,13 +170,12 @@ class SnapSchedClient(CephfsClient):
                 -errno.ENOENT, "Filesystem {} does not exist".format(fs))
         if fs in self.sqlite_connections:
             db_content = []
-            # TODO maybe do this in a transaction?
             db = self.sqlite_connections[fs]
             with db:
                 for row in db.iterdump():
                     db_content.append(row)
         with open_ioctx(self, metadata_pool) as ioctx:
-            ioctx.write_full("SNAP_DB_OBJECT_NAME",
+            ioctx.write_full(SNAP_DB_OBJECT_NAME,
                              '\n'.join(db_content).encode('utf-8'))
 
     @connection_pool_wrap
@@ -188,6 +190,17 @@ class SnapSchedClient(CephfsClient):
             raise CephfsConnectionException(-e.args[0], e.args[1])
         finally:
             self.refresh_snap_timers(fs_info[0])
+            self.prune_snapshots(fs_info, path, retention)
+
+    @connection_pool_wrap
+    def prune_snapshots(self, fs_info, path, retention):
+        self.log.debug('Pruning snapshots')
+        # try:
+            # get all dirs in path/.snap/
+            # throw out all user snaps - probably just name based
+            # split retention into <digit>[m,h,d,w,y]
+            # how to determine which snaps to delete?
+            # fs_info[1].
         # TODO: handle snap pruning accoring to retention
 
     @connection_pool_wrap
@@ -199,15 +212,26 @@ class SnapSchedClient(CephfsClient):
             return False
         return True
 
-    def list_snap_schedule(self, fs, path):
-        db = self.get_schedule_db(fs)
-        # with db:
-        scheds = []
-        for row in db.execute('SELECT * FROM SCHEDULES WHERE path LIKE ?',
-                              (f'{path}%',)):
-            scheds.append(row)
-        return scheds
+    LIST_SCHEDULES = '''SELECT
+        s.path, sm.schedule, sm.retention, sm.start, s.subvol, s.rel_path
+        FROM schedules s
+            INNER JOIN schedules_meta sm ON sm.schedule_id = s.id
+        WHERE s.path = ?'''
 
+    def list_snap_schedules(self, fs, path):
+        db = self.get_schedule_db(fs)
+        c = db.execute(self.LIST_SCHEDULES, (path,))
+        return [Schedule.from_db_row(row, fs) for row in c.fetchall()]
+
+    def dump_snap_schedule(self, fs, path):
+        db = self.get_schedule_db(fs)
+        # TODO retrieve multiple schedules per path from schedule_meta
+        # with db:
+        c = db.execute('SELECT * FROM SCHEDULES WHERE path LIKE ?',
+                       (f'{path}%',))
+        return [row for row in c.fetchall()]
+
+# TODO currently not used, probably broken
     UPDATE_SCHEDULE = '''UPDATE schedules
         SET
             schedule = ?,
@@ -217,6 +241,7 @@ class SnapSchedClient(CephfsClient):
         SET
             start = ?,
             repeat = ?,
+            schedule = ?
             retention = ?
         WHERE schedule_id = (
             SELECT id FROM SCHEDULES WHERE path = ?);'''
@@ -235,38 +260,31 @@ class SnapSchedClient(CephfsClient):
                         sched.path))
 
     INSERT_SCHEDULE = '''INSERT INTO
-        schedules(path, schedule, subvol, rel_path, active)
-        Values(?, ?, ?, ?, ?);'''
+        schedules(path, subvol, rel_path, active)
+        Values(?, ?, ?, ?);'''
     INSERT_SCHEDULE_META = '''INSERT INTO
-        schedules_meta(schedule_id, start, repeat, retention)
-        Values(last_insert_rowid(), ?, ?, ?)'''
+        schedules_meta(schedule_id, start, repeat, schedule, retention)
+        Values(last_insert_rowid(), ?, ?, ?, ?)'''
 
     @updates_schedule_db
     def store_snap_schedule(self, fs, sched):
         db = self.get_schedule_db(fs)
         with db:
-            db.execute(self.INSERT_SCHEDULE,
-                       (sched.path,
-                        sched.schedule,
-                        sched.subvol,
-                        sched.rel_path,
-                        1))
+            try:
+                db.execute(self.INSERT_SCHEDULE,
+                           (sched.path,
+                            sched.subvol,
+                            sched.rel_path,
+                            1))
+            except sqlite3.IntegrityError:
+                # might be adding another schedule
+                pass
             db.execute(self.INSERT_SCHEDULE_META,
                        (f'strftime("%s", "{sched.first_run}")',
                         sched.repeat_in_s(),
+                        sched.schedule,
                         sched.retention))
             self.store_schedule_db(sched.fs)
-
-    GET_SCHEULE = '''SELECT
-        s.path, s.schedule, sm.retention, sm.start, s.subvol, s.rel_path
-        FROM schedules s
-            INNER JOIN schedules_meta sm ON sm.schedule_id = s.id
-        WHERE s.path = ?'''
-
-    def get_snap_schedule(self, fs, path):
-        db = self.get_schedule_db(fs)
-        c = db.execute(self.GET_SCHEDULE, (path,))
-        return Schedule.from_db_row(c.fetchone(), fs)
 
     @updates_schedule_db
     def rm_snap_schedule(self, fs, path):
@@ -275,4 +293,6 @@ class SnapSchedClient(CephfsClient):
             cur = db.execute('SELECT id FROM SCHEDULES WHERE path = ?',
                              (path,))
             id_ = cur.fetchone()
-            db.execute('DELETE FROM schedules WHERE id = ?;', (id_,))
+            # TODO check for repeat-start pair and delete that if present, all
+            # otherwise. If repeat-start was speced, delete only those
+            db.execute('DELETE FROM schedules WHERE id = ?;', id_)
