@@ -7,15 +7,19 @@ import cephfs
 import errno
 import rados
 from contextlib import contextmanager
+import re
 from mgr_util import CephfsClient, CephfsConnectionException, \
         connection_pool_wrap
+from collections import OrderedDict
 from datetime import datetime
+from operator import attrgetter, itemgetter
 from threading import Timer
 import sqlite3
 
 
 SNAP_SCHEDULE_NAMESPACE = 'cephfs-snap-schedule'
 SNAP_DB_OBJECT_NAME = 'snap_db'
+TS_FORMAT = '%Y-%m-%d-%H_%M_%S'
 
 
 @contextmanager
@@ -60,6 +64,7 @@ class Schedule(object):
         self.rel_path = rel_path
         self.schedule = schedule
         self.retention = retention_policy
+        self._ret = {}
         self.first_run = start
         self.last_run = None
 
@@ -89,6 +94,17 @@ class Schedule(object):
             return period * 60 * 60 * 24 * 7
         else:
             raise Exception('schedule multiplier not recognized')
+
+
+def parse_retention(retention):
+    ret = {}
+    matches = re.findall(r'\d+[a-z]', retention)
+    for m in matches:
+        ret[m[-1]] = int(m[0:-1])
+    matches = re.findall(r'\d+[A-Z]', retention)
+    for m in matches:
+        ret[m[-1]] = int(m[0:-1])
+    return ret
 
 
 class SnapSchedClient(CephfsClient):
@@ -125,29 +141,35 @@ class SnapSchedClient(CephfsClient):
         ORDER BY until;'''
 
     def refresh_snap_timers(self, fs):
-        self.log.debug(f'SnapDB on {fs} changed, updating next Timer')
-        db = self.get_schedule_db(fs)
-        rows = []
-        with db:
-            cur = db.execute(self.EXEC_QUERY)
-            rows = cur.fetchmany(1)
-        timers = self.active_timers.get(fs, [])
-        for timer in timers:
-            timer.cancel()
-        timers = []
-        for row in rows:
-            self.log.debug(f'Creating new snapshot timer')
-            t = Timer(row[2],
-                      self.create_scheduled_snapshot,
-                      args=[fs, row[0], row[1]])
-            t.start()
-            timers.append(t)
-            self.log.debug(f'Will snapshot {row[0]} in fs {fs} in {row[2]}s')
-        self.active_timers[fs] = timers
+        try:
+            self.log.debug(f'SnapDB on {fs} changed, updating next Timer')
+            db = self.get_schedule_db(fs)
+            rows = []
+            with db:
+                cur = db.execute(self.EXEC_QUERY)
+                rows = cur.fetchmany(1)
+                self.log.debug(f'retrieved {cur.rowcount} rows')
+            timers = self.active_timers.get(fs, [])
+            for timer in timers:
+                timer.cancel()
+            timers = []
+            for row in rows:
+                self.log.debug(f'adding timer for {row}')
+                self.log.debug(f'Creating new snapshot timer')
+                t = Timer(row[2],
+                          self.create_scheduled_snapshot,
+                          args=[fs, row[0], row[1]])
+                t.start()
+                timers.append(t)
+                self.log.debug(f'Will snapshot {row[0]} in fs {fs} in {row[2]}s')
+            self.active_timers[fs] = timers
+        except Exception as e:
+            self.log.error(f'refresh raised {e}')
 
     def get_schedule_db(self, fs):
         if fs not in self.sqlite_connections:
-            self.sqlite_connections[fs] = sqlite3.connect(':memory:')
+            self.sqlite_connections[fs] = sqlite3.connect(':memory:',
+                                                          check_same_thread=False)
             with self.sqlite_connections[fs] as con:
                 con.execute("PRAGMA FOREIGN_KEYS = 1")
                 pool = self.get_metadata_pool(fs)
@@ -182,26 +204,80 @@ class SnapSchedClient(CephfsClient):
     def create_scheduled_snapshot(self, fs_info, path, retention):
         self.log.debug(f'Scheduled snapshot of {path} triggered')
         try:
-            time = datetime.datetime.utcnow().strftime('%Y-%m-%d-%H_%M_%S')
+            time = datetime.utcnow().strftime(TS_FORMAT)
             fs_info[1].mkdir(f'{path}/.snap/scheduled-{time}', 0o755)
             self.log.info(f'created scheduled snapshot of {path}')
         except cephfs.Error as e:
-            self.log.info(f'scheduled snapshot creating of {path} failed')
-            raise CephfsConnectionException(-e.args[0], e.args[1])
+            self.log.info(f'scheduled snapshot creating of {path} failed: {e}')
+        except Exception as e:
+            # catch all exceptions cause otherwise we'll never know since this
+            # is running in a thread
+            self.log.error(f'ERROR create_scheduled_snapshot raised{e}')
         finally:
+            self.log.info(f'finally branch')
             self.refresh_snap_timers(fs_info[0])
-            self.prune_snapshots(fs_info, path, retention)
+            self.log.info(f'calling prune')
+            self.prune_snapshots(fs_info[0], path, retention)
 
     @connection_pool_wrap
     def prune_snapshots(self, fs_info, path, retention):
         self.log.debug('Pruning snapshots')
-        # try:
-            # get all dirs in path/.snap/
-            # throw out all user snaps - probably just name based
-            # split retention into <digit>[m,h,d,w,y]
-            # how to determine which snaps to delete?
-            # fs_info[1].
+        ret = parse_retention(retention)
+        try:
+            prune_candidates = set()
+            with fs_info[1].opendir(f'{path}/.snap') as d_handle:
+                dir_ = fs_info[1].readdir(d_handle)
+                while dir_:
+                    if dir_.d_name.startswith(b'scheduled-'):
+                        self.log.debug(f'add {dir_.d_name} to pruning')
+                        ts = datetime.strptime(dir_.d_name.lstrip(b'scheduled-').decode('utf-8'), TS_FORMAT)
+                        prune_candidates.add((dir_, ts))
+                    else:
+                        self.log.debug(f'skipping dir entry {dir_.d_name}')
+                    dir_ = fs_info[1].readdir(d_handle)
+            to_keep = self.get_prune_set(prune_candidates, ret)
+            for k in prune_candidates - to_keep:
+                dirname = k[0].d_name.decode('utf-8')
+                self.log.debug(f'rmdir on {dirname}')
+                fs_info[1].rmdir(f'{path}/.snap/{dirname}')
+            self.log.debug(f'keeping {to_keep}')
+        except Exception as e:
+            self.log.debug(f'prune_snapshots threw {e}')
         # TODO: handle snap pruning accoring to retention
+
+    def get_prune_set(self, candidates, retention):
+        PRUNING_PATTERNS = OrderedDict([
+            #TODO remove M for release
+            ("M", '%Y-%m-%d-%H_%M'),
+            ("h", '%Y-%m-%d-%H'),
+            ("d", '%Y-%m-%d'),
+            ("w", '%G-%V'),
+            ("m", '%Y-%m'),
+            ("y", '%Y'),
+        ])
+        keep = set()
+        self.log.debug(retention)
+        for period, date_pattern in PRUNING_PATTERNS.items():
+            period_count = retention.get(period, 0)
+            if not period_count:
+                self.log.debug(f'skipping period {period}')
+                continue
+            last = None
+            for snap in sorted(candidates, key=lambda x: x[0].d_name,
+                               reverse=True):
+                snap_ts = snap[1].strftime(date_pattern)
+                self.log.debug(f'{snap_ts} : {last}')
+                if snap_ts != last:
+                    last = snap_ts
+                    if snap not in keep:
+                        self.log.debug(f'keeping {snap[0].d_name} due to {period_count}{period}')
+                        keep.add(snap)
+                        if len(keep) == period_count:
+                            self.log.debug(f'found enough snapshots for {period_count}{period}')
+                            break
+            # TODO maybe do candidates - keep here? we want snaps counting it
+            # hours not be considered for days and it cuts down on iterations
+        return keep
 
     @connection_pool_wrap
     def validate_schedule(self, fs_handle, sched):
