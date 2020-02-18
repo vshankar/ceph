@@ -61,7 +61,9 @@ void MetricsHandler::init() {
 
 void MetricsHandler::shutdown() {
   dout(10) << dendl;
+  ceph_assert(ceph_mutex_is_locked_by_me(mds->mds_lock));
 
+  mds->mds_lock.unlock();
   {
     std::scoped_lock locker(lock);
     ceph_assert(!stopping);
@@ -71,6 +73,7 @@ void MetricsHandler::shutdown() {
   if (updater.joinable()) {
     updater.join();
   }
+  mds->mds_lock.lock();
 }
 
 

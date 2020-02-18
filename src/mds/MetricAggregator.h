@@ -55,6 +55,7 @@ private:
   // drop this lock when calling ->send_message_mds() else mds might
   // deadlock
   ceph::spinlock lock;
+  MDSRank *mds;
   MgrClient *mgrc;
 
   // maintain a map of rank to list of clients so that when a rank

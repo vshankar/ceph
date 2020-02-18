@@ -1,6 +1,7 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 
+#include "MDSRank.h"
 #include "MetricAggregator.h"
 #include "mgr/MgrClient.h"
 
@@ -11,6 +12,7 @@
 
 MetricAggregator::MetricAggregator(CephContext *cct, MDSRank *mds, MgrClient *mgrc)
   : Dispatcher(cct),
+    mds(mds),
     mgrc(mgrc),
     mds_pinger(mds) {
 }
@@ -53,7 +55,9 @@ int MetricAggregator::init() {
 
 void MetricAggregator::shutdown() {
   dout(10) << dendl;
+  ceph_assert(ceph_mutex_is_locked_by_me(mds->mds_lock));
 
+  mds->mds_lock.unlock();
   {
     std::scoped_lock locker(lock);
     ceph_assert(!stopping);
@@ -63,6 +67,7 @@ void MetricAggregator::shutdown() {
   if (pinger.joinable()) {
     pinger.join();
   }
+  mds->mds_lock.lock();
 }
 
 bool MetricAggregator::ms_can_fast_dispatch2(const cref_t<Message> &m) const {
