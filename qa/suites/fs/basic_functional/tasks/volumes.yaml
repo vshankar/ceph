@@ -9,6 +9,10 @@ overrides:
       - is full \(reached quota
       - POOL_FULL
       - POOL_BACKFILLFULL
+    conf:
+      client:
+        debug ms: 20
+        debug client: 20
 
 tasks:
   - cephfs_test_runner:
