@@ -67,20 +67,23 @@ class Schedule(object):
         self.rel_path = rel_path
         self.schedule = schedule
         self.retention = retention_policy
-        self._ret = {}
         self.first_run = start
         self.last_run = None
 
     def __str__(self):
         return f'''{self.rel_path}: {self.schedule}; {self.retention}'''
 
+    def report(self):
+        import pprint
+        return pprint.pformat(self.__dict__)
+
     @classmethod
     def from_db_row(cls, table_row, fs):
         return cls(table_row[0],
                    table_row[1],
                    table_row[2],
-                   fs,
                    table_row[3],
+                   fs,
                    table_row[4],
                    None)
 
@@ -293,87 +296,104 @@ class SnapSchedClient(CephfsClient):
             return False
         return True
 
-    LIST_SCHEDULES = '''SELECT
+    GET_SCHEDULES = '''SELECT
         s.path, sm.schedule, sm.retention, sm.start, s.subvol, s.rel_path
         FROM schedules s
             INNER JOIN schedules_meta sm ON sm.schedule_id = s.id
         WHERE s.path = ?'''
 
-    def list_snap_schedules(self, fs, path):
+    def get_snap_schedules(self, fs, path):
         db = self.get_schedule_db(fs)
-        c = db.execute(self.LIST_SCHEDULES, (path,))
+        c = db.execute(self.GET_SCHEDULES, (path,))
         return [Schedule.from_db_row(row, fs) for row in c.fetchall()]
 
-    def dump_snap_schedule(self, fs, path):
+    LIST_SCHEDULES = '''SELECT
+        s.path, sm.schedule, sm.retention
+        FROM schedules s
+            INNER JOIN schedules_meta sm ON sm.schedule_id = s.id
+        WHERE'''
+
+    def list_snap_schedules(self, fs, path, recursive):
         db = self.get_schedule_db(fs)
         # TODO retrieve multiple schedules per path from schedule_meta
         # with db:
-        c = db.execute('SELECT * FROM SCHEDULES WHERE path LIKE ?',
+        if recursive:
+            c = db.execute(self.LIST_SCHEDULES + ' path LIKE ?',
                        (f'{path}%',))
+        else:
+            c = db.execute(self.LIST_SCHEDULES + ' path = ?',
+                       (f'{path}',))
         return [row for row in c.fetchall()]
-
-# TODO currently not used, probably broken
-    UPDATE_SCHEDULE = '''UPDATE schedules
-        SET
-            schedule = ?,
-            active = 1
-        WHERE path = ?;'''
-    UPDATE_SCHEDULE_META = '''UPDATE schedules_meta
-        SET
-            start = ?,
-            repeat = ?,
-            schedule = ?
-            retention = ?
-        WHERE schedule_id = (
-            SELECT id FROM SCHEDULES WHERE path = ?);'''
-
-    @updates_schedule_db
-    def update_snap_schedule(self, fs, sched):
-        db = self.get_schedule_db(fs)
-        with db:
-            db.execute(self.UPDATE_SCHEDULE,
-                       (sched.schedule,
-                        sched.path))
-            db.execute(self.UPDATE_SCHEDULE_META,
-                       (f'strftime("%s", "{sched.first_run}")',
-                        sched.repeat_in_s(),
-                        sched.retention,
-                        sched.path))
 
     INSERT_SCHEDULE = '''INSERT INTO
         schedules(path, subvol, rel_path, active)
         Values(?, ?, ?, ?);'''
     INSERT_SCHEDULE_META = '''INSERT INTO
         schedules_meta(schedule_id, start, repeat, schedule, retention)
-        Values(last_insert_rowid(), ?, ?, ?, ?)'''
+        Values(?, ?, ?, ?, ?)'''
 
     @updates_schedule_db
     def store_snap_schedule(self, fs, sched):
+        log.debug(f'attempting to add schedule {sched}')
         db = self.get_schedule_db(fs)
+        sched_id = None
         with db:
             try:
-                db.execute(self.INSERT_SCHEDULE,
+                c = db.execute(self.INSERT_SCHEDULE,
                            (sched.path,
                             sched.subvol,
                             sched.rel_path,
                             1))
+                sched_id = c.lastrowid
             except sqlite3.IntegrityError:
-                # might be adding another schedule
+                # might be adding another schedule, retrieve sched id
+                log.debug(f'found schedule entry for {sched.path}, trying to add meta')
+                c = db.execute('SELECT id FROM schedules where path = ?',
+                               (sched.path,))
+                sched_id = c.fetchone()[0]
                 pass
             db.execute(self.INSERT_SCHEDULE_META,
-                       (f'strftime("%s", "{sched.first_run}")',
+                       (sched_id,
+                        f'strftime("%s", "{sched.first_run}")',
                         sched.repeat_in_s(),
                         sched.schedule,
                         sched.retention))
             self.store_schedule_db(sched.fs)
 
     @updates_schedule_db
-    def rm_snap_schedule(self, fs, path):
+    def rm_snap_schedule(self, fs, path, repeat, start):
         db = self.get_schedule_db(fs)
         with db:
-            cur = db.execute('SELECT id FROM SCHEDULES WHERE path = ?',
+            cur = db.execute('SELECT id FROM schedules WHERE path = ?',
                              (path,))
             id_ = cur.fetchone()
-            # TODO check for repeat-start pair and delete that if present, all
-            # otherwise. If repeat-start was speced, delete only those
-            db.execute('DELETE FROM schedules WHERE id = ?;', id_)
+
+            if repeat or start:
+                meta_delete = ' DELETE FROM schedules_meta WHERE schedule_id = ?'
+                delete_param = id_
+                if repeat:
+                    meta_delete += ' AND schedule = ?'
+                    delete_param += (repeat,)
+                if start:
+                    meta_delete += ' AND start = ?'
+                    delete_param += (start,)
+                # maybe only delete meta entry
+                log.debug(f'executing {meta_delete}, {delete_param}')
+                r = db.execute('SELECT * FROM schedules_meta')
+                log.debug(f'before: {r.fetchall()}')
+                res = db.execute(meta_delete + ';', delete_param)
+                log.debug(f'delete result is {res.fetchall()}')
+                db.execute('COMMIT;')
+                r = db.execute('SELECT * FROM schedules_meta')
+                log.debug(f'after: {r.fetchall()}')
+                # now check if we have schedules in meta left, if not delete
+                # the schedule as well
+                meta_count = db.execute('SELECT COUNT() FROM schedules_meta WHERE schedule_id = ?',
+                                      id_)
+                if meta_count.fetchone() == (0,):
+                    log.debug(f'no more schedules left, cleaning up schedules table')
+                    db.execute('DELETE FROM schedules WHERE id = ?;', id_)
+            else:
+                # just delete the schedule CASCADE DELETE takes care of the
+                # rest
+                db.execute('DELETE FROM schedules WHERE id = ?;', id_)
