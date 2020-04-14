@@ -3,6 +3,7 @@ Copyright (C) 2019 SUSE
 
 LGPL2.1.  See file COPYING.
 """
+import json
 import errno
 import sqlite3
 from .fs.schedule import SnapSchedClient, Schedule
@@ -75,7 +76,7 @@ class Module(MgrModule):
             return e.to_tuple()
         if not scheds:
             return -1, '', f'SnapSchedule for {path} not found'
-        return 0, str([str(sched) for sched in scheds]), ''
+        return 0, json.dumps([[sched[1], sched[2]] for sched in scheds]), ''
 
     @CLIWriteCommand('fs snap-schedule add',
                      'name=path,type=CephString '
