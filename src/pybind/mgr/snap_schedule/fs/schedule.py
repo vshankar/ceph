@@ -71,7 +71,7 @@ class Schedule(object):
         self.last_run = None
 
     def __str__(self):
-        return f'''{self.rel_path}: {self.schedule}; {self.retention}'''
+        return f'''{self.path}: {self.schedule}; {self.retention}'''
 
     def report(self):
         import pprint
@@ -223,7 +223,7 @@ class SnapSchedClient(CephfsClient):
             log.info(f'finally branch')
             self.refresh_snap_timers(fs_name)
             log.info(f'calling prune')
-            self.prune_snapshots(fs_name, path, retention)
+            #self.prune_snapshots(fs_name, path, retention)
 
     def prune_snapshots(self, fs_name, path, retention):
         log.debug('Pruning snapshots')
