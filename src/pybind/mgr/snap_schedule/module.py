@@ -4,6 +4,7 @@ Copyright (C) 2019 SUSE
 LGPL2.1.  See file COPYING.
 """
 import errno
+import json
 import sqlite3
 from .fs.schedule import SnapSchedClient, Schedule
 from mgr_module import MgrModule, CLIReadCommand, CLIWriteCommand
@@ -26,7 +27,7 @@ class Module(MgrModule):
         rc, subvol_path, err = self.remote('fs', 'subvolume', 'getpath',
                                            fs, subvol)
         if rc != 0:
-            # TODO custom exception
+            # TODO custom exception?
             raise Exception(f'Could not resolve {path} in {fs}, {subvol}')
         return subvol_path + path
 
@@ -75,7 +76,7 @@ class Module(MgrModule):
             return e.to_tuple()
         if not scheds:
             return -1, '', f'SnapSchedule for {path} not found'
-        return 0, str([str(sched) for sched in scheds]), ''
+        return 0, json.dumps([[sched[1], sched[2]] for sched in scheds]), ''
 
     @CLIWriteCommand('fs snap-schedule add',
                      'name=path,type=CephString '
@@ -89,7 +90,7 @@ class Module(MgrModule):
                           path,
                           snap_schedule,
                           retention_policy='',
-                          start='00:00',
+                          start=None,
                           fs=None,
                           subvol=None):
         try:
@@ -97,8 +98,8 @@ class Module(MgrModule):
             abs_path = self.resolve_subvolume_path(fs, subvol, path)
             sched = Schedule(abs_path, snap_schedule, retention_policy,
                              start, use_fs, subvol, path)
-            # TODO allow schedules on non-existent paths?
-            # self.client.validate_schedule(fs, sched)
+            # TODO allow schedules on non-existent paths? yes, will be set to
+            # inactive if path does not exist for first snap execution
             self.client.store_snap_schedule(use_fs, sched)
             suc_msg = f'Schedule set for path {path}'
         except sqlite3.IntegrityError:

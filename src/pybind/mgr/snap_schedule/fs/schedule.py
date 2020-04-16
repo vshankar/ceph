@@ -11,7 +11,7 @@ import re
 from mgr_util import CephfsClient, CephfsConnectionException, \
         open_filesystem
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 from operator import attrgetter, itemgetter
 from threading import Timer
@@ -19,8 +19,12 @@ import sqlite3
 
 
 SNAP_SCHEDULE_NAMESPACE = 'cephfs-snap-schedule'
-SNAP_DB_OBJECT_NAME = 'snap_db'
-TS_FORMAT = '%Y-%m-%d-%H_%M_%S'
+SNAP_DB_PREFIX = 'snap_db'
+# increment this every time the db schema changes and provide upgrade code
+SNAP_DB_VERSION = '0'
+SNAP_DB_OBJECT_NAME = f'{SNAP_DB_PREFIX}_v{SNAP_DB_VERSION}'
+SNAPSHOT_TS_FORMAT = '%Y-%m-%d-%H_%M_%S'
+DB_TS_FORMAT =  '%Y-%m-%d %H:%M:%S'
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +54,7 @@ def updates_schedule_db(func):
 
 class Schedule(object):
     '''
-    Wrapper to work with schedules stored in Rados objects
+    Wrapper to work with schedules stored in sqlite
     '''
     def __init__(self,
                  path,
@@ -67,11 +71,15 @@ class Schedule(object):
         self.rel_path = rel_path
         self.schedule = schedule
         self.retention = retention_policy
-        self.first_run = start
+        if start == None:
+            now = datetime.now(timezone.utc)
+            start = datetime(now.year, now.month, now.day)
+        self.start = start
+        self.first_run = None
         self.last_run = None
 
     def __str__(self):
-        return f'''{self.rel_path}: {self.schedule}; {self.retention}'''
+        return f'''{self.path}: {self.schedule}; {self.retention}'''
 
     def report(self):
         import pprint
@@ -82,7 +90,7 @@ class Schedule(object):
         return cls(table_row[0],
                    table_row[1],
                    table_row[2],
-                   table_row[3],
+                   datetime.fromtimestamp(table_row[3]),
                    fs,
                    table_row[4],
                    None)
@@ -115,6 +123,7 @@ def parse_retention(retention):
 
 class SnapSchedClient(CephfsClient):
 
+    # add first_run, last_run, counti, created, pruned to meta?
     CREATE_TABLES = '''CREATE TABLE schedules(
         id integer PRIMARY KEY ASC,
         path text NOT NULL UNIQUE,
@@ -139,6 +148,7 @@ class SnapSchedClient(CephfsClient):
         self.sqlite_connections = {}
         self.active_timers = {}
 
+    # TODO limit query to all schedules with start in the past
     EXEC_QUERY = '''SELECT
         s.path, sm.retention,
         sm.repeat - (strftime("%s", "now") - sm.start) % sm.repeat "until"
@@ -209,12 +219,15 @@ class SnapSchedClient(CephfsClient):
     def create_scheduled_snapshot(self, fs_name, path, retention):
         log.debug(f'Scheduled snapshot of {path} triggered')
         try:
-            time = datetime.utcnow().strftime(TS_FORMAT)
+            time = datetime.now(timezone.utc).strftime(SNAPSHOT_TS_FORMAT)
             with open_filesystem(self, fs_name) as fs_handle:
                 fs_handle.mkdir(f'{path}/.snap/scheduled-{time}', 0o755)
             log.info(f'created scheduled snapshot of {path}')
+            # self.client.validate_schedule(fs, sched)
+            # TODO change last snap timestamp in db, maybe first
         except cephfs.Error as e:
             log.info(f'scheduled snapshot creating of {path} failed: {e}')
+            # TODO set inactive if path doesn't exist
         except Exception as e:
             # catch all exceptions cause otherwise we'll never know since this
             # is running in a thread
@@ -228,6 +241,10 @@ class SnapSchedClient(CephfsClient):
     def prune_snapshots(self, fs_name, path, retention):
         log.debug('Pruning snapshots')
         ret = parse_retention(retention)
+        if not ret:
+            # TODO prune if too many (300?)
+            log.debug(f'schedule on {path} has no retention specified')
+            return
         try:
             prune_candidates = set()
             with open_filesystem(self, fs_name) as fs_handle:
@@ -238,7 +255,7 @@ class SnapSchedClient(CephfsClient):
                             log.debug(f'add {dir_.d_name} to pruning')
                             ts = datetime.strptime(
                                 dir_.d_name.lstrip(b'scheduled-').decode('utf-8'),
-                                TS_FORMAT)
+                                SNAPSHOT_TS_FORMAT)
                             prune_candidates.add((dir_, ts))
                         else:
                             log.debug(f'skipping dir entry {dir_.d_name}')
@@ -251,7 +268,6 @@ class SnapSchedClient(CephfsClient):
                 log.debug(f'keeping {to_keep}')
         except Exception as e:
             log.debug(f'prune_snapshots threw {e}')
-        # TODO: handle snap pruning accoring to retention
 
     def get_prune_set(self, candidates, retention):
         PRUNING_PATTERNS = OrderedDict([
@@ -287,15 +303,6 @@ class SnapSchedClient(CephfsClient):
             # hours not be considered for days and it cuts down on iterations
         return keep
 
-    def validate_schedule(self, fs_name, sched):
-        try:
-            with open_filesystem(self, fs_name) as fs_handle:
-                fs_handle.stat(sched.path)
-        except cephfs.ObjectNotFound:
-            log.error('Path {} not found'.format(sched.path))
-            return False
-        return True
-
     GET_SCHEDULES = '''SELECT
         s.path, sm.schedule, sm.retention, sm.start, s.subvol, s.rel_path
         FROM schedules s
@@ -328,9 +335,11 @@ class SnapSchedClient(CephfsClient):
     INSERT_SCHEDULE = '''INSERT INTO
         schedules(path, subvol, rel_path, active)
         Values(?, ?, ?, ?);'''
+    # TODO store proper timestamp in DB and format as timestamp only for exec
+    # query
     INSERT_SCHEDULE_META = '''INSERT INTO
         schedules_meta(schedule_id, start, repeat, schedule, retention)
-        Values(?, ?, ?, ?, ?)'''
+        SELECT ?, strftime("%s", ?), ?, ?, ?'''
 
     @updates_schedule_db
     def store_snap_schedule(self, fs, sched):
@@ -354,7 +363,7 @@ class SnapSchedClient(CephfsClient):
                 pass
             db.execute(self.INSERT_SCHEDULE_META,
                        (sched_id,
-                        f'strftime("%s", "{sched.first_run}")',
+                        'now', #sched.start,
                         sched.repeat_in_s(),
                         sched.schedule,
                         sched.retention))
