@@ -13,7 +13,6 @@ from mgr_util import CephfsClient, CephfsConnectionException, \
 from collections import OrderedDict
 from datetime import datetime, timezone
 import logging
-from operator import attrgetter, itemgetter
 from threading import Timer
 import sqlite3
 
@@ -24,7 +23,6 @@ SNAP_DB_PREFIX = 'snap_db'
 SNAP_DB_VERSION = '0'
 SNAP_DB_OBJECT_NAME = f'{SNAP_DB_PREFIX}_v{SNAP_DB_VERSION}'
 SNAPSHOT_TS_FORMAT = '%Y-%m-%d-%H_%M_%S'
-DB_TS_FORMAT =  '%Y-%m-%d %H:%M:%S'
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +62,12 @@ class Schedule(object):
                  fs_name,
                  subvol,
                  rel_path,
+                 created=None,
+                 first=None,
+                 last=None,
+                 last_pruned=None,
+                 created_count=0,
+                 pruned_count=0,
                  ):
         self.fs = fs_name
         self.subvol = subvol
@@ -71,29 +75,184 @@ class Schedule(object):
         self.rel_path = rel_path
         self.schedule = schedule
         self.retention = retention_policy
-        if start == None:
+        if start is None:
             now = datetime.now(timezone.utc)
-            start = datetime(now.year, now.month, now.day)
-        self.start = start
-        self.first_run = None
-        self.last_run = None
+            self.start = datetime(now.year,
+                                  now.month,
+                                  now.day,
+                                  tzinfo=now.tzinfo)
+        else:
+            self.start = datetime.fromisoformat(start).astimezone(timezone.utc)
+        if created is None:
+            self.created = datetime.now(timezone.utc)
+        if first:
+            self.first = datetime.fromisoformat(first)
+        else:
+            self.first = first
+        if last:
+            self.last = datetime.fromisoformat(last)
+        else:
+            self.last = last
+        if last_pruned:
+            self.last_pruned = datetime.fromisoformat(last_pruned)
+        else:
+            self.last_pruned = last_pruned
+        self.last = last
+        self.last_pruned = last_pruned
+        self.created_count = created_count
+        self.pruned_count = pruned_count
 
     def __str__(self):
         return f'''{self.path}: {self.schedule}; {self.retention}'''
 
+    CREATE_TABLES = '''CREATE TABLE schedules(
+        id integer PRIMARY KEY ASC,
+        path text NOT NULL UNIQUE,
+        subvol text,
+        rel_path text NOT NULL,
+        active int NOT NULL
+    );
+    CREATE TABLE schedules_meta(
+        id INTEGER PRIMARY KEY ASC,
+        schedule_id INT,
+        start TEXT NOT NULL,
+        first TEXT,
+        last TEXT,
+        last_pruned TEXT,
+        created TEXT,
+        repeat BIGINT NOT NULL,
+        schedule TEXT NOT NULL,
+        created_count INT,
+        pruned_count INT,
+        retention TEXT,
+        FOREIGN KEY(schedule_id) REFERENCES schedules(id) ON DELETE CASCADE,
+        UNIQUE (start, repeat)
+    );'''
+
+    GET_SCHEDULES = '''SELECT
+        s.path, s.subvol, s.rel_path, s.active,
+        sm.schedule, sm.retention, sm.start, sm.first, sm.last,
+        sm.last_pruned, sm.created, sm.created_count, sm.pruned_count
+        FROM schedules s
+            INNER JOIN schedules_meta sm ON sm.schedule_id = s.id
+        WHERE s.path = ?'''
+
+    @classmethod
+    def get_schedules(cls, path, db, fs):
+        with db:
+            c = db.execute(cls.GET_SCHEDULES, (path,))
+        return [Schedule._from_get_query(row, fs) for row in c.fetchall()]
+
+    @classmethod
+    def _from_get_query(cls, table_row, fs):
+        return cls(table_row['path'],
+                   table_row['schedule'],
+                   table_row['retention'],
+                   table_row['start'],
+                   fs,
+                   table_row['subvol'],
+                   table_row['rel_path'],
+                   table_row['created'],
+                   table_row['first'],
+                   table_row['last'],
+                   table_row['last_pruned'],
+                   table_row['created_count'],
+                   table_row['pruned_count'])
+
+    LIST_SCHEDULES = '''SELECT
+        s.path, sm.schedule, sm.retention
+        FROM schedules s
+            INNER JOIN schedules_meta sm ON sm.schedule_id = s.id
+        WHERE'''
+
+    @classmethod
+    def list_schedules(cls, path, db, fs, recursive):
+        with db:
+            if recursive:
+                c = db.execute(cls.LIST_SCHEDULES + ' path LIKE ?',
+                               (f'{path}%',))
+            else:
+                c = db.execute(cls.LIST_SCHEDULES + ' path = ?',
+                               (f'{path}',))
+        return [row for row in c.fetchall()]
+
+    INSERT_SCHEDULE = '''INSERT INTO
+        schedules(path, subvol, rel_path, active)
+        Values(?, ?, ?, ?);'''
+    INSERT_SCHEDULE_META = '''INSERT INTO
+        schedules_meta(schedule_id, start, created, repeat, schedule, retention)
+        SELECT ?, ?, ?, ?, ?, ?'''
+
+    def store_schedule(self, db):
+        sched_id = None
+        with db:
+            try:
+                c = db.execute(self.INSERT_SCHEDULE,
+                               (self.path,
+                                self.subvol,
+                                self.rel_path,
+                                1))
+                sched_id = c.lastrowid
+            except sqlite3.IntegrityError:
+                # might be adding another schedule, retrieve sched id
+                log.debug(f'found schedule entry for {self.path}, trying to add meta')
+                c = db.execute('SELECT id FROM schedules where path = ?',
+                               (self.path,))
+                sched_id = c.fetchone()[0]
+                pass
+            db.execute(self.INSERT_SCHEDULE_META,
+                       (sched_id,
+                        self.start.isoformat(),
+                        self.created,
+                        self.repeat_in_s(),
+                        self.schedule,
+                        self.retention))
+
+    @classmethod
+    def rm_schedule(cls, db, path, repeat, start):
+        with db:
+            cur = db.execute('SELECT id FROM schedules WHERE path = ?',
+                             (path,))
+            row = cur.fetchone()
+
+            if len(row) == 0:
+                log.info(f'no schedule for {path} found')
+                raise ValueError('SnapSchedule for {} not found'.format(path))
+
+            id_ = tuple(row)
+
+            if repeat or start:
+                meta_delete = 'DELETE FROM schedules_meta WHERE schedule_id = ?'
+                delete_param = id_
+                if repeat:
+                    meta_delete += ' AND schedule = ?'
+                    delete_param += (repeat,)
+                if start:
+                    meta_delete += ' AND start = ?'
+                    delete_param += (start,)
+                # maybe only delete meta entry
+                log.debug(f'executing {meta_delete}, {delete_param}')
+                res = db.execute(meta_delete + ';', delete_param).rowcount
+                if res < 1:
+                    raise ValueError(f'No schedule found for {repeat} {start}')
+                db.execute('COMMIT;')
+                # now check if we have schedules in meta left, if not delete
+                # the schedule as well
+                meta_count = db.execute(
+                    'SELECT COUNT() FROM schedules_meta WHERE schedule_id = ?',
+                    id_)
+                if meta_count.fetchone() == (0,):
+                    log.debug(
+                        f'no more schedules left, cleaning up schedules table')
+                    db.execute('DELETE FROM schedules WHERE id = ?;', id_)
+            else:
+                # just delete the schedule CASCADE DELETE takes care of the
+                # rest
+                db.execute('DELETE FROM schedules WHERE id = ?;', id_)
+
     def report(self):
         import pprint
         return pprint.pformat(self.__dict__)
-
-    @classmethod
-    def from_db_row(cls, table_row, fs):
-        return cls(table_row[0],
-                   table_row[1],
-                   table_row[2],
-                   datetime.fromtimestamp(table_row[3]),
-                   fs,
-                   table_row[4],
-                   None)
 
     def repeat_in_s(self):
         mult = self.schedule[-1]
@@ -123,25 +282,6 @@ def parse_retention(retention):
 
 class SnapSchedClient(CephfsClient):
 
-    # add first_run, last_run, counti, created, pruned to meta?
-    CREATE_TABLES = '''CREATE TABLE schedules(
-        id integer PRIMARY KEY ASC,
-        path text NOT NULL UNIQUE,
-        subvol text,
-        rel_path text NOT NULL,
-        active int NOT NULL
-    );
-    CREATE TABLE schedules_meta(
-        id integer PRIMARY KEY ASC,
-        schedule_id int,
-        start bigint NOT NULL,
-        repeat bigint NOT NULL,
-        schedule text NOT NULL,
-        retention text,
-        FOREIGN KEY(schedule_id) REFERENCES schedules(id) ON DELETE CASCADE,
-        UNIQUE (start, repeat)
-    );'''
-
     def __init__(self, mgr):
         super(SnapSchedClient, self).__init__(mgr)
         # TODO maybe iterate over all fs instance in fsmap and load snap dbs?
@@ -151,7 +291,7 @@ class SnapSchedClient(CephfsClient):
     # TODO limit query to all schedules with start in the past
     EXEC_QUERY = '''SELECT
         s.path, sm.retention,
-        sm.repeat - (strftime("%s", "now") - sm.start) % sm.repeat "until"
+        sm.repeat - (strftime("%s", "now") - strftime("%s", sm.start)) % sm.repeat "until"
         FROM schedules s
             INNER JOIN schedules_meta sm ON sm.schedule_id = s.id
         ORDER BY until;'''
@@ -164,7 +304,6 @@ class SnapSchedClient(CephfsClient):
             with db:
                 cur = db.execute(self.EXEC_QUERY)
                 rows = cur.fetchmany(1)
-                log.debug(f'retrieved {cur.rowcount} rows')
             timers = self.active_timers.get(fs, [])
             for timer in timers:
                 timer.cancel()
@@ -184,9 +323,11 @@ class SnapSchedClient(CephfsClient):
 
     def get_schedule_db(self, fs):
         if fs not in self.sqlite_connections:
-            self.sqlite_connections[fs] = sqlite3.connect(':memory:',
-                                                          check_same_thread=False)
+            self.sqlite_connections[fs] = sqlite3.connect(
+                ':memory:',
+                check_same_thread=False)
             with self.sqlite_connections[fs] as con:
+                con.row_factory = sqlite3.Row
                 con.execute("PRAGMA FOREIGN_KEYS = 1")
                 pool = self.get_metadata_pool(fs)
                 with open_ioctx(self, pool) as ioctx:
@@ -197,7 +338,7 @@ class SnapSchedClient(CephfsClient):
                         con.executescript(db)
                     except rados.ObjectNotFound:
                         log.info(f'No schedule DB found in {fs}')
-                        con.executescript(self.CREATE_TABLES)
+                        con.executescript(Schedule.CREATE_TABLES)
         return self.sqlite_connections[fs]
 
     def store_schedule_db(self, fs):
@@ -223,7 +364,6 @@ class SnapSchedClient(CephfsClient):
             with open_filesystem(self, fs_name) as fs_handle:
                 fs_handle.mkdir(f'{path}/.snap/scheduled-{time}', 0o755)
             log.info(f'created scheduled snapshot of {path}')
-            # self.client.validate_schedule(fs, sched)
             # TODO change last snap timestamp in db, maybe first
         except cephfs.Error as e:
             log.info(f'scheduled snapshot creating of {path} failed: {e}')
@@ -303,106 +443,22 @@ class SnapSchedClient(CephfsClient):
             # hours not be considered for days and it cuts down on iterations
         return keep
 
-    GET_SCHEDULES = '''SELECT
-        s.path, sm.schedule, sm.retention, sm.start, s.subvol, s.rel_path
-        FROM schedules s
-            INNER JOIN schedules_meta sm ON sm.schedule_id = s.id
-        WHERE s.path = ?'''
-
     def get_snap_schedules(self, fs, path):
         db = self.get_schedule_db(fs)
-        c = db.execute(self.GET_SCHEDULES, (path,))
-        return [Schedule.from_db_row(row, fs) for row in c.fetchall()]
-
-    LIST_SCHEDULES = '''SELECT
-        s.path, sm.schedule, sm.retention
-        FROM schedules s
-            INNER JOIN schedules_meta sm ON sm.schedule_id = s.id
-        WHERE'''
+        return Schedule.get_schedules(path, db, fs)
 
     def list_snap_schedules(self, fs, path, recursive):
         db = self.get_schedule_db(fs)
-        # TODO retrieve multiple schedules per path from schedule_meta
-        # with db:
-        if recursive:
-            c = db.execute(self.LIST_SCHEDULES + ' path LIKE ?',
-                       (f'{path}%',))
-        else:
-            c = db.execute(self.LIST_SCHEDULES + ' path = ?',
-                       (f'{path}',))
-        return [row for row in c.fetchall()]
-
-    INSERT_SCHEDULE = '''INSERT INTO
-        schedules(path, subvol, rel_path, active)
-        Values(?, ?, ?, ?);'''
-    # TODO store proper timestamp in DB and format as timestamp only for exec
-    # query
-    INSERT_SCHEDULE_META = '''INSERT INTO
-        schedules_meta(schedule_id, start, repeat, schedule, retention)
-        SELECT ?, strftime("%s", ?), ?, ?, ?'''
+        return Schedule.list_schedules(path, db, fs, recursive)
 
     @updates_schedule_db
     def store_snap_schedule(self, fs, sched):
         log.debug(f'attempting to add schedule {sched}')
         db = self.get_schedule_db(fs)
-        sched_id = None
-        with db:
-            try:
-                c = db.execute(self.INSERT_SCHEDULE,
-                           (sched.path,
-                            sched.subvol,
-                            sched.rel_path,
-                            1))
-                sched_id = c.lastrowid
-            except sqlite3.IntegrityError:
-                # might be adding another schedule, retrieve sched id
-                log.debug(f'found schedule entry for {sched.path}, trying to add meta')
-                c = db.execute('SELECT id FROM schedules where path = ?',
-                               (sched.path,))
-                sched_id = c.fetchone()[0]
-                pass
-            db.execute(self.INSERT_SCHEDULE_META,
-                       (sched_id,
-                        'now', #sched.start,
-                        sched.repeat_in_s(),
-                        sched.schedule,
-                        sched.retention))
-            self.store_schedule_db(sched.fs)
+        sched.store_schedule(db)
+        self.store_schedule_db(sched.fs)
 
     @updates_schedule_db
     def rm_snap_schedule(self, fs, path, repeat, start):
         db = self.get_schedule_db(fs)
-        with db:
-            cur = db.execute('SELECT id FROM schedules WHERE path = ?',
-                             (path,))
-            id_ = cur.fetchone()
-
-            if repeat or start:
-                meta_delete = ' DELETE FROM schedules_meta WHERE schedule_id = ?'
-                delete_param = id_
-                if repeat:
-                    meta_delete += ' AND schedule = ?'
-                    delete_param += (repeat,)
-                if start:
-                    meta_delete += ' AND start = ?'
-                    delete_param += (start,)
-                # maybe only delete meta entry
-                log.debug(f'executing {meta_delete}, {delete_param}')
-                r = db.execute('SELECT * FROM schedules_meta')
-                log.debug(f'before: {r.fetchall()}')
-                res = db.execute(meta_delete + ';', delete_param)
-                log.debug(f'delete result is {res.fetchall()}')
-                db.execute('COMMIT;')
-                r = db.execute('SELECT * FROM schedules_meta')
-                log.debug(f'after: {r.fetchall()}')
-                # now check if we have schedules in meta left, if not delete
-                # the schedule as well
-                meta_count = db.execute('SELECT COUNT() FROM schedules_meta WHERE schedule_id = ?',
-                                      id_)
-                if meta_count.fetchone() == (0,):
-                    log.debug(f'no more schedules left, cleaning up schedules table')
-                    db.execute('DELETE FROM schedules WHERE id = ?;', id_)
-            else:
-                # just delete the schedule CASCADE DELETE takes care of the
-                # rest
-                db.execute('DELETE FROM schedules WHERE id = ?;', id_)
+        Schedule.rm_schedule(db, path, repeat, start)

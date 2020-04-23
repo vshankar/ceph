@@ -75,7 +75,7 @@ class Module(MgrModule):
         except CephfsConnectionException as e:
             return e.to_tuple()
         if not scheds:
-            return -1, '', f'SnapSchedule for {path} not found'
+            return errno.ENOENT, '', f'SnapSchedule for {path} not found'
         return 0, json.dumps([[sched[1], sched[2]] for sched in scheds]), ''
 
     @CLIWriteCommand('fs snap-schedule add',
@@ -98,15 +98,14 @@ class Module(MgrModule):
             abs_path = self.resolve_subvolume_path(fs, subvol, path)
             sched = Schedule(abs_path, snap_schedule, retention_policy,
                              start, use_fs, subvol, path)
-            # TODO allow schedules on non-existent paths? yes, will be set to
-            # inactive if path does not exist for first snap execution
             self.client.store_snap_schedule(use_fs, sched)
             suc_msg = f'Schedule set for path {path}'
         except sqlite3.IntegrityError:
-            existing_sched = self.client.get_snap_schedules(use_fs, path)
-            error_msg = f'Found existing schedule {existing_sched}'
+            existing_scheds = self.client.get_snap_schedules(use_fs, path)
+            report = [s.report() for s in existing_scheds]
+            error_msg = f'Found existing schedule {report}'
             self.log.error(error_msg)
-            return 1, '', error_msg
+            return errno.EEXIST, '', error_msg
         except CephfsConnectionException as e:
             return e.to_tuple()
         return 0, suc_msg, ''
@@ -118,13 +117,18 @@ class Module(MgrModule):
                      'name=subvol,type=CephString,req=false '
                      'name=fs,type=CephString,req=false',
                      'Remove a snapshot schedule for <path>')
-    def snap_schedule_rm(self, path, repeat=None, start=None, subvol=None, fs=None):
+    def snap_schedule_rm(self,
+                         path,
+                         repeat=None,
+                         start=None,
+                         subvol=None,
+                         fs=None):
         try:
             use_fs = fs if fs else self.default_fs
             abs_path = self.resolve_subvolume_path(fs, subvol, path)
             self.client.rm_snap_schedule(use_fs, abs_path, repeat, start)
         except CephfsConnectionException as e:
             return e.to_tuple()
-        except ObjectNotFound as e:
-            return e.errno, '', 'SnapSchedule for {} not found'.format(path)
+        except ValueError as e:
+            return errno.ENOENT, '', str(e)
         return 0, 'Schedule removed for path {}'.format(path), ''
