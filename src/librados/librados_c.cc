@@ -746,7 +746,7 @@ static void do_out_buffer(bufferlist& outbl, char **outbuf, size_t *outbuflen)
     *outbuflen = outbl.length();
 }
 
-static void do_out_buffer(string& outbl, char **outbuf, size_t *outbuflen)
+static void do_out_buffer(const string& outbl, char **outbuf, size_t *outbuflen)
 {
   if (outbuf) {
     if (outbl.length() > 0) {
@@ -2892,8 +2892,42 @@ extern "C" int _rados_notify2(rados_ioctx_t io, const char *o,
     memcpy(p.c_str(), buf, buf_len);
     bl.push_back(p);
   }
-  int ret = ctx->notify(oid, bl, timeout_ms, NULL, reply_buffer, reply_buffer_len);
-  tracepoint(librados, rados_notify2_exit, ret);
+
+  bufferlist outbl;
+  int ret = ctx->notify(oid, bl, timeout_ms, &outbl, NULL, NULL);
+
+  if (ret != 0 || !outbl.length()) {
+    return ret;
+  }
+
+  map<pair<uint64_t,uint64_t>,bufferlist> rm;
+  set<pair<uint64_t,uint64_t> > missed;
+  auto iter = outbl.cbegin();
+  decode(rm, iter);
+  decode(missed, iter);
+
+  ceph::JSONFormatter f;
+  f.open_object_section("result");
+  f.open_object_section("acks");
+  for (auto &p : rm) {
+    f.open_object_section(stringify(p.first.first));
+    f.dump_int("cookie", p.first.second);
+    f.dump_string("data", p.second.to_str());
+    f.close_section();
+  }
+  f.close_section();
+  f.open_object_section("timeouts");
+  for (auto &p : missed) {
+    f.open_object_section(stringify(p.first));
+    f.dump_int("cookie", p.second);
+    f.close_section();
+  }
+  f.close_section();
+  f.close_section();
+
+  std::ostringstream os;
+  f.flush(os);
+  do_out_buffer(os.str(), reply_buffer, reply_buffer_len);
   return ret;
 }
 LIBRADOS_C_API_BASE_DEFAULT(rados_notify2);

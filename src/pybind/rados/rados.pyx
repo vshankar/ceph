@@ -3544,7 +3544,7 @@ returned %d, but should return zero on success." % (self.name, ret))
 
         :raises: :class:`TypeError`
         :raises: :class:`Error`
-        :returns: bool - True on success, otherwise raise an error
+        :returns: tuple of (bool, reply, replylen), otherwise raise an error
         """
         self.require_ioctx_open()
 
@@ -3556,13 +3556,18 @@ returned %d, but should return zero on success." % (self.name, ret))
             char *_msg = msg
             int _msglen = msglen
             uint64_t _timeout_ms = timeout_ms
+            char *reply
+            size_t replylen = 0
 
         with nogil:
-            ret = rados_notify2(self.io, _obj, _msg, _msglen, _timeout_ms,
-                                NULL, NULL)
+            ret = rados_notify2(self.io, _obj, _msg, _msglen, _timeout_ms, &reply, &replylen)
         if ret < 0:
             raise make_ex(ret, "Failed to notify %r" % (obj))
-        return True
+        if not replylen:
+           return (True, '', 0)
+        outstr = reply[0:replylen]
+        rados_buffer_free(reply)
+        return (True, decode_cstr(outstr), replylen)
 
     @requires(('obj', str), ('callback', opt(Callable)),
               ('error_callback', opt(Callable)), ('timeout', int))
