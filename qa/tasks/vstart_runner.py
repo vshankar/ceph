@@ -398,7 +398,7 @@ class LocalRemote(object):
     # vstart_runner.py.
     def _do_run(self, args, check_status=True, wait=True, stdout=None,
                 stderr=None, cwd=None, stdin=None, logger=None, label=None,
-                env=None, timeout=None, omit_sudo=True):
+                env=None, timeout=None, omit_sudo=False):
         args = self._perform_checks_and_return_list_of_args(args, omit_sudo)
 
         # We have to use shell=True if any run.Raw was present, e.g. &&
