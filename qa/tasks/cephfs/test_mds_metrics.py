@@ -44,11 +44,12 @@ class TestMDSMetrics(CephFSTestCase):
                     return False
             global_metrics = metrics['global_metrics']
             client_metadata = metrics['client_metadata']
-            for client in list(client_metadata.keys()):
-                if client_metadata[client]['mount_point'] == "N/A":
-                    del client_metadata[client]
-                    del global_metrics[client]
-            if not len(global_metrics) == client_count or not len(client_metadata) == client_count:
+            #for client in list(client_metadata.keys()):
+            #    if client_metadata[client]['mount_point'] == "N/A" and \
+            #       'kernel_version' not in client_metadata[client]:
+            #        del client_metadata[client]
+            #        del global_metrics[client]
+            if not len(global_metrics) >= client_count or not len(client_metadata) >= client_count:
                 return False
             return True
         return verify_metrics_cbk
