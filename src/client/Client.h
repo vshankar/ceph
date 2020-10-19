@@ -464,7 +464,8 @@ public:
   int enumerate_layout(int fd, vector<ObjectExtent>& result,
 		       loff_t length, loff_t offset);
 
-  int mksnap(const char *path, const char *name, const UserPerm& perm);
+  int mksnap(const char *path, const char *name, const UserPerm& perm,
+             mode_t mode=0, const char *metadata_dict=nullptr);
   int rmsnap(const char *path, const char *name, const UserPerm& perm);
 
   // Inode permission checking
@@ -1187,7 +1188,7 @@ private:
   int _unlink(Inode *dir, const char *name, const UserPerm& perm);
   int _rename(Inode *olddir, const char *oname, Inode *ndir, const char *nname, const UserPerm& perm);
   int _mkdir(Inode *dir, const char *name, mode_t mode, const UserPerm& perm,
-	     InodeRef *inp = 0);
+	     InodeRef *inp = 0, const char *metdata_dict=nullptr);
   int _rmdir(Inode *dir, const char *name, const UserPerm& perms);
   int _symlink(Inode *dir, const char *name, const char *target,
 	       const UserPerm& perms, InodeRef *inp = 0);
