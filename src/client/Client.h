@@ -438,6 +438,8 @@ public:
   int sync_fs();
   int64_t drop_caches();
 
+  int get_snap_info(const char *path, const UserPerm &perms, struct snap_info *snap_info);
+
   // hpc lazyio
   int lazyio(int fd, int enable);
   int lazyio_propagate(int fd, loff_t offset, size_t count);

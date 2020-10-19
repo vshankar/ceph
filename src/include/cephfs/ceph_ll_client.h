@@ -85,6 +85,12 @@ struct ceph_statx {
 #define CEPH_STATX_VERSION	0x00001000U     /* Want/got stx_version */
 #define CEPH_STATX_ALL_STATS	0x00001fffU     /* All supported stats */
 
+struct snap_info {
+  uint64_t id;
+  char *metadata;
+  unsigned long metadata_len;
+};
+
 /*
  * Compatibility macros until these defines make their way into glibc
  */
