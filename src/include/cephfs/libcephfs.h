@@ -639,6 +639,33 @@ void ceph_seekdir(struct ceph_mount_info *cmount, struct ceph_dir_result *dirp, 
 int ceph_mkdir(struct ceph_mount_info *cmount, const char *path, mode_t mode);
 
 /**
+ * Create a snapshot
+ *
+ * @param cmount the ceph mount handle to use for making the directory.
+ * @param path the path of the directory to create snapshot.  This must be either an
+ *        absolute path or a relative path off of the current working directory.
+ * @param name snapshot name
+ * @param mode the permissions the directory should have once created.
+ * @param metadata_dict encoded key value pairs to be persisted with the snapshot.
+ *                      For example: {foo=bar, this=that} should be encoded
+ *                      as "foo\0bar\0this\0that\0\0"
+ * @returns 0 on success or a negative return code on error.
+ */
+int ceph_mksnap(struct ceph_mount_info *cmount, const char *path, const char *name,
+                mode_t mode, const char *metadata_dict);
+
+/**
+ * Remove a snapshot
+ *
+ * @param cmount the ceph mount handle to use for making the directory.
+ * @param path the path of the directory to create snapshot.  This must be either an
+ *        absolute path or a relative path off of the current working directory.
+ * @param name snapshot name
+ * @returns 0 on success or a negative return code on error.
+ */
+int ceph_rmsnap(struct ceph_mount_info *cmount, const char *path, const char *name);
+
+/**
  * Create multiple directories at once.
  *
  * @param cmount the ceph mount handle to use for making the directories.
@@ -1899,6 +1926,17 @@ void ceph_finish_reclaim(struct ceph_mount_info *cmount);
  */
 void ceph_ll_register_callbacks(struct ceph_mount_info *cmount,
 				struct ceph_client_callback_args *args);
+
+/**
+ * Get snapshot info
+ *
+ * @param cmount the ceph mount handle to use for making the directory.
+ * @param path the path of the snapshot.  This must be either an
+ *        absolute path or a relative path off of the current working directory.
+ * @returns 0 on success or a negative return code on error.
+ */
+int ceph_get_snap_info(struct ceph_mount_info *cmount,
+		       const char *path, struct snap_info *snap_info);
 #ifdef __cplusplus
 }
 #endif

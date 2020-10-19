@@ -715,6 +715,21 @@ extern "C" int ceph_mkdir(struct ceph_mount_info *cmount, const char *path, mode
   return cmount->get_client()->mkdir(path, mode, cmount->default_perms);
 }
 
+extern "C" int ceph_mksnap(struct ceph_mount_info *cmount, const char *path, const char *name,
+                           mode_t mode, const char *metadata_dict)
+{
+  if (!cmount->is_mounted())
+    return -ENOTCONN;
+  return cmount->get_client()->mksnap(path, name, cmount->default_perms, mode, metadata_dict);
+}
+
+extern "C" int ceph_rmsnap(struct ceph_mount_info *cmount, const char *path, const char *name)
+{
+  if (!cmount->is_mounted())
+    return -ENOTCONN;
+  return cmount->get_client()->rmsnap(path, name, cmount->default_perms);
+}
+
 extern "C" int ceph_mkdirs(struct ceph_mount_info *cmount, const char *path, mode_t mode)
 {
   if (!cmount->is_mounted())
@@ -2015,4 +2030,11 @@ extern "C" void ceph_ll_register_callbacks(class ceph_mount_info *cmount,
 					   struct ceph_client_callback_args *args)
 {
   cmount->get_client()->ll_register_callbacks(args);
+
+}
+
+
+extern "C" int ceph_get_snap_info(struct ceph_mount_info *cmount,
+                                  const char *path, struct snap_info *snap_info) {
+  return cmount->get_client()->get_snap_info(path, cmount->default_perms, snap_info);
 }

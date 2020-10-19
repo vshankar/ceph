@@ -10786,6 +10786,56 @@ int Client::_flock(Fh *fh, int cmd, uint64_t owner)
   return ret;
 }
 
+int Client::get_snap_info(const char *path, const UserPerm &perms, struct snap_info *snap_info) {
+  RWRef_t mref_reader(mount_state, CLIENT_MOUNTING);
+  if (!mref_reader.is_state_satisfied()) {
+    return -ENOTCONN;
+  }
+
+  std::unique_lock locker(client_lock);
+  InodeRef in;
+  int r = Client::path_walk(path, &in, perms, true);
+  if (r < 0) {
+    return r;
+  }
+
+  if (in->snapid == CEPH_NOSNAP) {
+    return -EINVAL;
+  }
+
+  snap_info->id = in->snapid.val;
+  std::string metadata_str;
+  uint64_t len = 0;
+  for (auto &[key, value] : in->snap_metadata) {
+    // each key, value is padded by '\0'
+    len += key.size() + value.size() + 2;
+  }
+
+  snap_info->metadata_len = 0;
+  if (len) {
+    ++len; // terminated by '\0'
+    snap_info->metadata_len = len;
+    snap_info->metadata = (char *)malloc(len);
+    if (!snap_info->metadata) {
+      return -ENOMEM;
+    }
+    len = 0;
+    for (auto &[key, value] : in->snap_metadata) {
+      memcpy(snap_info->metadata + len, key.c_str(), key.size());
+      len += key.size();
+      snap_info->metadata[len] = '\0';
+      ++len;
+      memcpy(snap_info->metadata + len, value.c_str(), value.size());
+      len += value.size();
+      snap_info->metadata[len] = '\0';
+      ++len;
+    }
+    snap_info->metadata[len] = '\0';
+  }
+
+  return 0;
+}
+
 int Client::ll_statfs(Inode *in, struct statvfs *stbuf, const UserPerm& perms)
 {
   /* Since the only thing this does is wrap a call to statfs, and
