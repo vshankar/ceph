@@ -2395,3 +2395,39 @@ TEST(LibCephFS, Lseek) {
   ASSERT_EQ(0, ceph_close(cmount, fd));
   ceph_shutdown(cmount);
 }
+
+TEST(LibCephFS, SnapInfo) {
+  struct ceph_mount_info *cmount;
+  ASSERT_EQ(ceph_create(&cmount, NULL), 0);
+  ASSERT_EQ(ceph_conf_read_file(cmount, NULL), 0);
+  ASSERT_EQ(0, ceph_conf_parse_env(cmount, NULL));
+  ASSERT_EQ(ceph_mount(cmount, NULL), 0);
+
+  snap_info info;
+  ASSERT_EQ(-EINVAL, ceph_get_snap_info(cmount, "/", &info));
+
+  char snap_name[64];
+  char snap_path[128];
+  sprintf(snap_name, "%s_%d", "snap0", getpid());
+  sprintf(snap_path, "/.snap/%s", snap_name);
+
+  // snapshot without custom metadata
+  ASSERT_EQ(0, ceph_mkdir(cmount, snap_path, 0755));
+
+  ASSERT_EQ(0, ceph_get_snap_info(cmount, snap_path, &info));
+  ASSERT_GT(info.id, 0);
+  ASSERT_EQ(info.metadata_len, 0);
+
+  ASSERT_EQ(0, ceph_rmdir(cmount, snap_path));
+
+  // snapshot with custom metadata
+  ASSERT_EQ(0, ceph_mksnap(cmount, "/", snap_name, 0755, "foo\0bar\0this\0that\0\0"));
+  ASSERT_EQ(0, ceph_get_snap_info(cmount, snap_path, &info));
+  ASSERT_GT(info.id, 0);
+  ASSERT_EQ(info.metadata_len, 19);
+  ASSERT_EQ(0, memcmp(info.metadata, "foo\0bar\0this\0that\0\0", info.metadata_len));
+  ceph_buffer_free(info.metadata);
+
+  ASSERT_EQ(0, ceph_rmsnap(cmount, "/", snap_name));
+  ceph_shutdown(cmount);
+}
