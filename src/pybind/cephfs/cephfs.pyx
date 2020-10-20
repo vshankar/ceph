@@ -137,6 +137,11 @@ cdef extern from "cephfs/ceph_ll_client.h":
         timespec    stx_btime
         uint64_t    stx_version
 
+    cdef struct snap_info:
+        uint64_t id
+        char *metadata
+        unsigned long metadata_len
+
 cdef extern from "cephfs/libcephfs.h" nogil:
     cdef struct ceph_mount_info:
         pass
@@ -205,6 +210,9 @@ cdef extern from "cephfs/libcephfs.h" nogil:
     int ceph_close(ceph_mount_info *cmount, int fd)
     int ceph_open(ceph_mount_info *cmount, const char *path, int flags, mode_t mode)
     int ceph_mkdir(ceph_mount_info *cmount, const char *path, mode_t mode)
+    int ceph_mksnap(ceph_mount_info *cmount, const char *path, const char *name, mode_t mode, const char *metadata_dict)
+    int ceph_rmsnap(ceph_mount_info *cmount, const char *path, const char *name)
+    int ceph_get_snap_info(ceph_mount_info *cmount, const char *path, snap_info *snap_info)
     int ceph_mkdirs(ceph_mount_info *cmount, const char *path, mode_t mode)
     int ceph_closedir(ceph_mount_info *cmount, ceph_dir_result *dirp)
     int ceph_opendir(ceph_mount_info *cmount, const char *name, ceph_dir_result **dirpp)
@@ -514,6 +522,36 @@ def decode_cstr(val, encoding="utf-8"):
         return None
 
     return val.decode(encoding)
+
+def dict_to_str(d):
+    """
+    return a string repr for a dictionary. something like:
+    {'a': 1, 'b': 2} is represented as 'a\01\0b\02\0\0'
+    """
+    dstr = ''.join('{}\0{}\0'.format(*item) for item in d.items())
+    dstr += '\0'
+    return dstr
+
+def str_to_dict(s, l):
+    """
+    construct and return a dictionary from a string.
+    'a\01\0b\02\0\0' is constructed to {'a': '1', 'b': '2'}
+    note that the keys and values would always be a string
+    """
+    dct = {}
+    idx = [0,0] # start, end
+    while not idx[0] == l-1:
+        def extract():
+            pos = s[idx[0]:].find(0) + idx[0]
+            if pos == -1:
+                raise InvalidValue('invalid string format')
+            ex = s[idx[0]:pos]
+            idx[0] = idx[1] = pos+1
+            return ex
+        key = extract()
+        val = extract()
+        dct[key.decode('utf-8')] = val.decode('utf-8')
+    return dct
 
 cdef timeval to_timeval(t):
     """
@@ -1152,6 +1190,82 @@ cdef class LibCephFS(object):
             ret = ceph_mkdir(self.cluster, _path, _mode)
         if ret < 0:
             raise make_ex(ret, "error in mkdir {}".format(path.decode('utf-8')))
+
+    def mksnap(self, path, name, mode, metadata={}):
+        """
+        Create a snapshot.
+
+        :param path: path of the directory to snapshot.
+        :param name: snapshot name
+        :param mode: permission the snapshot
+
+        :raises: :class: `TypeError`
+        :raises: :class: `Error`
+        :returns: int: 0 on success
+        """
+
+        self.require_state("mounted")
+        path = cstr(path, 'path')
+        name = cstr(name, 'name')
+        if not isinstance(mode, int):
+            raise TypeError('mode must be an int')
+        if not isinstance(metadata, dict):
+            raise TypeError('metadata must be an dictionary')
+        metadata_str = cstr(dict_to_str(metadata), 'metadata')
+        cdef:
+            char* _path = path
+            char* _name = name
+            int _mode = mode
+            char *_metadata = metadata_str
+        with nogil:
+            ret = ceph_mksnap(self.cluster, _path, _name, _mode, _metadata)
+        if ret < 0:
+            raise make_ex(ret, "mksnap error")
+        return 0
+
+    def rmsnap(self, path, name):
+        """
+        Remove a snapshot.
+
+        :param path: path of the directory for removing snapshot
+        :param name: snapshot name
+
+        :raises: :class: `Error`
+        :returns: int: 0 on success
+        """
+        self.require_state("mounted")
+        path = cstr(path, 'path')
+        name = cstr(name, 'name')
+        cdef:
+            char* _path = path
+            char* _name = name
+        ret = ceph_rmsnap(self.cluster, _path, _name)
+        if ret < 0:
+            raise make_ex(ret, "rmsnap error")
+        return 0
+
+    def snap_info(self, path):
+        """
+        Fetch sapshot info
+
+        :param path: snapshot path
+
+        :raises: :class: `Error`
+        :returns: dict: snapshot metadata
+        """
+        self.require_state("mounted")
+        path = cstr(path, 'path')
+        cdef:
+            char* _path = path
+            snap_info info
+        ret = ceph_get_snap_info(self.cluster, _path, &info)
+        if ret < 0:
+            raise make_ex(ret, "snap_info error")
+        md = {}
+        if info.metadata_len:
+            md = str_to_dict(info.metadata[:info.metadata_len], info.metadata_len)
+            ceph_buffer_free(info.metadata)
+        return {'id': info.id, 'metadata': md}
 
     def chmod(self, path, mode) :
         """
