@@ -8797,6 +8797,11 @@ std::vector<Option> get_cephfs_mirror_options() {
     .set_description("")
     .set_long_description(""),
 
+    Option("cephfs_max_snapshot_sync_per_cycle", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    .set_default(3)
+    .set_min(1)
+    .set_description("number of snapshots to mirror in one cycle")
+    .set_long_description("maximum number of snapshots to mirror when a directory is picked up for mirroring by worker threads."),
     });
 }
 
