@@ -4,6 +4,7 @@
 #include <stack>
 #include <fcntl.h>
 #include <algorithm>
+#include <sys/time.h>
 
 #include "common/admin_socket.h"
 #include "common/ceph_context.h"
@@ -482,21 +483,12 @@ int PeerReplayer::propagate_snap_renames(
 }
 
 int PeerReplayer::remote_mkdir(const std::string &local_path,
-                               const std::string &remote_path) {
+                               const std::string &remote_path,
+                               const struct ceph_statx &stx) {
   dout(10) << ": local_path=" << local_path << ", remote_path=" << remote_path
            << dendl;
 
-  struct ceph_statx stx;
-  int r = ceph_statx(m_local_mount, local_path.c_str(), &stx,
-                     CEPH_STATX_MODE | CEPH_STATX_UID | CEPH_STATX_GID |
-                     CEPH_STATX_ATIME | CEPH_STATX_MTIME, AT_NO_ATTR_SYNC | AT_SYMLINK_NOFOLLOW);
-  if (r < 0) {
-    derr << ": failed to stat local path=" << local_path << ": " << cpp_strerror(r)
-         << dendl;
-    return r;
-  }
-
-  r = ceph_mkdir(m_remote_mount, remote_path.c_str(), stx.stx_mode & ~S_IFDIR);
+  int r = ceph_mkdir(m_remote_mount, remote_path.c_str(), stx.stx_mode & ~S_IFDIR);
   if (r < 0 && r != -EEXIST) {
     derr << ": failed to create remote directory=" << remote_path << ": " << cpp_strerror(r)
          << dendl;
@@ -507,6 +499,15 @@ int PeerReplayer::remote_mkdir(const std::string &local_path,
   if (r < 0) {
     derr << ": failed to chown remote directory=" << remote_path << ": " << cpp_strerror(r)
          << dendl;
+    return r;
+  }
+
+  struct timeval times[] = {{stx.stx_atime.tv_sec, stx.stx_atime.tv_nsec / 1000},
+                            {stx.stx_mtime.tv_sec, stx.stx_mtime.tv_nsec / 1000}};
+  r = ceph_lutimes(m_remote_mount, remote_path.c_str(), times);
+  if (r < 0) {
+    derr << ": failed to change [am]time on remote directory=" << remote_path << ": "
+         << cpp_strerror(r) << dendl;
     return r;
   }
 
@@ -608,19 +609,12 @@ close_local_fd:
 }
 
 int PeerReplayer::remote_file_op(const std::string &local_path,
-                                 const std::string &remote_path) {
+                                 const std::string &remote_path,
+                                 const struct ceph_statx &stx) {
   dout(10) << ": local_path=" << local_path << ", remote_path=" << remote_path
            << dendl;
 
-  struct ceph_statx stx;
-  int r = ceph_statx(m_local_mount, local_path.c_str(), &stx,
-                     CEPH_STATX_MODE | CEPH_STATX_UID | CEPH_STATX_GID | CEPH_STATX_SIZE |
-                     CEPH_STATX_ATIME | CEPH_STATX_MTIME, AT_NO_ATTR_SYNC | AT_SYMLINK_NOFOLLOW);
-  if (r < 0) {
-    derr << ": failed to stat local path=" << local_path << ": " << cpp_strerror(r) << dendl;
-    return r;
-  }
-
+  int r;
   if (S_ISREG(stx.stx_mode)) {
     r = remote_copy(local_path, remote_path, stx);
     if (r < 0) {
@@ -654,6 +648,15 @@ int PeerReplayer::remote_file_op(const std::string &local_path,
     return r;
   }
 
+  struct timeval times[] = {{stx.stx_atime.tv_sec, stx.stx_atime.tv_nsec / 1000},
+                            {stx.stx_mtime.tv_sec, stx.stx_mtime.tv_nsec / 1000}};
+  r = ceph_lutimes(m_remote_mount, remote_path.c_str(), times);
+  if (r < 0) {
+    derr << ": failed to change [am]time on remote directory=" << remote_path << ": "
+         << cpp_strerror(r) << dendl;
+    return r;
+  }
+
   return 0;
 }
 
@@ -669,7 +672,18 @@ int PeerReplayer::cleanup_remote_dir(const std::string &dir_path) {
     return r;
   }
 
-  rm_stack.emplace(SyncEntry(dir_path, tdirp, true));
+  struct ceph_statx tstx;
+  r = ceph_statx(m_local_mount, dir_path.c_str(), &tstx,
+                 CEPH_STATX_MODE | CEPH_STATX_UID | CEPH_STATX_GID |
+                 CEPH_STATX_SIZE | CEPH_STATX_ATIME | CEPH_STATX_MTIME,
+                 AT_NO_ATTR_SYNC | AT_SYMLINK_NOFOLLOW);
+  if (r < 0) {
+    derr << ": failed to stat remote directory=" << dir_path << ": "
+         << cpp_strerror(r) << dendl;
+    return r;
+  }
+
+  rm_stack.emplace(SyncEntry(dir_path, tdirp, tstx));
   while (!rm_stack.empty()) {
     dout(20) << ": " << rm_stack.size() << " entries in stack" << dendl;
     std::string e_name;
@@ -726,9 +740,9 @@ int PeerReplayer::cleanup_remote_dir(const std::string &dir_path) {
                << cpp_strerror(r) << dendl;
           break;
         }
-        rm_stack.emplace(SyncEntry(epath, dirp, true));
+        rm_stack.emplace(SyncEntry(epath, dirp, stx));
       } else {
-        rm_stack.emplace(SyncEntry(epath));
+        rm_stack.emplace(SyncEntry(epath, stx));
       }
     } else {
       r = ceph_unlink(m_remote_mount, entry.epath.c_str());
@@ -771,7 +785,18 @@ int PeerReplayer::do_synchronize(const std::string &dir_path, const std::string 
     return r;
   }
 
-  sync_stack.emplace(SyncEntry("/", tdirp, true));
+  struct ceph_statx tstx;
+  r = ceph_statx(m_local_mount, snap_path.c_str(), &tstx,
+                 CEPH_STATX_MODE | CEPH_STATX_UID | CEPH_STATX_GID |
+                 CEPH_STATX_SIZE | CEPH_STATX_ATIME | CEPH_STATX_MTIME,
+                 AT_NO_ATTR_SYNC | AT_SYMLINK_NOFOLLOW);
+  if (r < 0) {
+    derr << ": failed to stat local directory=" << snap_path << ": "
+         << cpp_strerror(r) << dendl;
+    return r;
+  }
+
+  sync_stack.emplace(SyncEntry("/", tdirp, tstx));
   while (!sync_stack.empty()) {
     dout(20) << ": " << sync_stack.size() << " entries in stack" << dendl;
     std::string e_name;
@@ -782,7 +807,9 @@ int PeerReplayer::do_synchronize(const std::string &dir_path, const std::string 
       struct dirent de;
       while (true) {
         r = ceph_readdirplus_r(m_local_mount, entry.dirp, &de, &stx,
-                               CEPH_STATX_MODE, AT_NO_ATTR_SYNC | AT_SYMLINK_NOFOLLOW, NULL);
+                               CEPH_STATX_MODE | CEPH_STATX_UID | CEPH_STATX_GID |
+                               CEPH_STATX_SIZE | CEPH_STATX_ATIME | CEPH_STATX_MTIME,
+                               AT_NO_ATTR_SYNC | AT_SYMLINK_NOFOLLOW, NULL);
         if (r < 0) {
           derr << ": failed to local read directory=" << entry.epath << dendl;
           break;
@@ -814,7 +841,7 @@ int PeerReplayer::do_synchronize(const std::string &dir_path, const std::string 
       auto l_path = entry_path(snap_path, epath);
       auto r_path = entry_path(dir_path, epath);
       if (S_ISDIR(stx.stx_mode)) {
-        r = remote_mkdir(l_path, r_path);
+        r = remote_mkdir(l_path, r_path, stx);
         if (r < 0) {
           break;
         }
@@ -825,14 +852,14 @@ int PeerReplayer::do_synchronize(const std::string &dir_path, const std::string 
                << cpp_strerror(r) << dendl;
           break;
         }
-        sync_stack.emplace(SyncEntry(epath, dirp, true));
+        sync_stack.emplace(SyncEntry(epath, dirp, stx));
       } else {
-        sync_stack.emplace(SyncEntry(epath));
+        sync_stack.emplace(SyncEntry(epath, stx));
       }
     } else {
       auto l_path = entry_path(snap_path, entry.epath);
       auto r_path = entry_path(dir_path, entry.epath);
-      r = remote_file_op(l_path, r_path);
+      r = remote_file_op(l_path, r_path, entry.stx);
       if (r < 0) {
         break;
       }

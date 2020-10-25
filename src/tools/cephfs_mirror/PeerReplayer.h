@@ -71,21 +71,23 @@ private:
   struct SyncEntry {
     std::string epath;
     ceph_dir_result *dirp; // valid for directories
-    bool is_dir = false;
+    struct ceph_statx stx;
 
-    SyncEntry(std::string_view path)
-      : epath(path) {
+    SyncEntry(std::string_view path,
+              const struct ceph_statx &stx)
+      : epath(path),
+        stx(stx) {
     }
     SyncEntry(std::string_view path,
-              ceph_dir_result *dirp,  bool is_dir)
+              ceph_dir_result *dirp,
+              const struct ceph_statx &stx)
       : epath(path),
         dirp(dirp),
-        is_dir(is_dir) {
-      ceph_assert(is_dir);
+        stx(stx) {
     }
 
     bool is_directory() const {
-      return is_dir;
+      return S_ISDIR(stx.stx_mode);
     }
   };
 
@@ -127,9 +129,10 @@ private:
   int do_synchronize(const std::string &path, const std::string &snap_name);
 
   int cleanup_remote_dir(const std::string &dir_path);
-  int remote_mkdir(const std::string &local_path, const std::string &remote_path);
-  int remote_file_op(const std::string &local_path, const std::string &remote_path);
-
+  int remote_mkdir(const std::string &local_path, const std::string &remote_path,
+                   const struct ceph_statx &stx);
+  int remote_file_op(const std::string &local_path, const std::string &remote_path,
+                     const struct ceph_statx &stx);
   int remote_copy(const std::string &local_path,const std::string &remote_path,
                   const struct ceph_statx &local_stx);
 };
