@@ -103,33 +103,33 @@ private:
     boost::optional<double> last_sync_duration;
   };
 
-  void _set_last_synced_snap(std::string_view dir_path, uint64_t snap_id,
+  void _set_last_synced_snap(const std::string &dir_path, uint64_t snap_id,
                             const std::string &snap_name) {
-    auto &sync_stat = m_snap_sync_stats.at(std::string(dir_path));
+    auto &sync_stat = m_snap_sync_stats.at(dir_path);
     sync_stat.last_synced_snap = std::make_pair(snap_id, snap_name);
     sync_stat.current_syncing_snap = boost::none;
   }
-  void set_last_synced_snap(std::string_view dir_path, uint64_t snap_id,
+  void set_last_synced_snap(const std::string &dir_path, uint64_t snap_id,
                             const std::string &snap_name) {
     std::scoped_lock locker(m_lock);
     _set_last_synced_snap(dir_path, snap_id, snap_name);
   }
-  void set_current_syncing_snap(std::string_view dir_path, uint64_t snap_id,
+  void set_current_syncing_snap(const std::string &dir_path, uint64_t snap_id,
                                 const std::string &snap_name) {
     std::scoped_lock locker(m_lock);
-    auto &sync_stat = m_snap_sync_stats.at(std::string(dir_path));
+    auto &sync_stat = m_snap_sync_stats.at(dir_path);
     sync_stat.current_syncing_snap = std::make_pair(snap_id, snap_name);
   }
-  void inc_deleted_snap(std::string_view dir_path) {
+  void inc_deleted_snap(const std::string &dir_path) {
     std::scoped_lock locker(m_lock);
-    auto &sync_stat = m_snap_sync_stats.at(std::string(dir_path));
+    auto &sync_stat = m_snap_sync_stats.at(dir_path);
     ++sync_stat.deleted_snap_count;
   }
-  void set_last_synced_stat(std::string_view dir_path, uint64_t snap_id,
+  void set_last_synced_stat(const std::string &dir_path, uint64_t snap_id,
                             const std::string &snap_name, double duration) {
     std::scoped_lock locker(m_lock);
     _set_last_synced_snap(dir_path, snap_id, snap_name);
-    auto &sync_stat = m_snap_sync_stats.at(std::string(dir_path));
+    auto &sync_stat = m_snap_sync_stats.at(dir_path);
     sync_stat.last_synced = clock::now();
     sync_stat.last_sync_duration = duration;
     ++sync_stat.synced_snap_count;
@@ -157,20 +157,20 @@ private:
   void run(SnapshotReplayerThread *replayer);
 
   boost::optional<std::string> pick_directory();
-  int register_directory(std::string_view dir_path, SnapshotReplayerThread *replayer);
-  void unregister_directory(std::string_view dir_path);
-  int try_lock_directory(std::string_view dir_path, SnapshotReplayerThread *replayer,
+  int register_directory(const std::string &dir_path, SnapshotReplayerThread *replayer);
+  void unregister_directory(const std::string &dir_path);
+  int try_lock_directory(const std::string &dir_path, SnapshotReplayerThread *replayer,
                          DirRegistry *registry);
-  void unlock_directory(std::string_view dir_path, const DirRegistry &registry);
-  void sync_snaps(std::string_view dir_path, std::unique_lock<ceph::mutex> &locker);
+  void unlock_directory(const std::string &dir_path, const DirRegistry &registry);
+  void sync_snaps(const std::string &dir_path, std::unique_lock<ceph::mutex> &locker);
 
-  int do_sync_snaps(std::string_view dir_path);
-  int build_snap_map(std::string_view, std::map<uint64_t, std::string> *snap_map,
+  int do_sync_snaps(const std::string &dir_path);
+  int build_snap_map(const std::string &dir_path, std::map<uint64_t, std::string> *snap_map,
                      bool is_remote=false);
-  int propagate_snap_deletes(std::string_view dir_name, const std::set<std::string> &snaps);
-  int propagate_snap_renames(std::string_view dir_name,
+  int propagate_snap_deletes(const std::string &dir_name, const std::set<std::string> &snaps);
+  int propagate_snap_renames(const std::string &dir_name,
                              const std::set<std::pair<std::string,std::string>> &snaps);
-  int synchronize(std::string_view dir_path, uint64_t snap_id, std::string_view snap_name);
+  int synchronize(const std::string &dir_path, uint64_t snap_id, const std::string &snap_name);
   int do_synchronize(const std::string &path, const std::string &snap_name);
 
   int cleanup_remote_dir(const std::string &dir_path);

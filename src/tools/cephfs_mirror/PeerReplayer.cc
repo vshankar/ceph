@@ -266,10 +266,10 @@ boost::optional<std::string> PeerReplayer::pick_directory() {
   return candidate;
 }
 
-int PeerReplayer::register_directory(std::string_view dir_path,
+int PeerReplayer::register_directory(const std::string &dir_path,
                                      SnapshotReplayerThread *replayer) {
   dout(20) << ": dir_path=" << dir_path << dendl;
-  ceph_assert(m_registered.find(std::string(dir_path)) == m_registered.end());
+  ceph_assert(m_registered.find(dir_path) == m_registered.end());
 
   DirRegistry registry;
   int r = try_lock_directory(dir_path, replayer, &registry);
@@ -283,26 +283,24 @@ int PeerReplayer::register_directory(std::string_view dir_path,
   return 0;
 }
 
-void PeerReplayer::unregister_directory(std::string_view dir_path) {
+void PeerReplayer::unregister_directory(const std::string &dir_path) {
   dout(20) << ": dir_path=" << dir_path << dendl;
 
-  auto _dir_path = std::string(dir_path);
-  auto it = m_registered.find(_dir_path);
+  auto it = m_registered.find(dir_path);
   ceph_assert(it != m_registered.end());
 
   unlock_directory(it->first, it->second);
   m_registered.erase(it);
-  if (std::find(m_directories.begin(), m_directories.end(), _dir_path) == m_directories.end()) {
-    m_snap_sync_stats.erase(_dir_path);
+  if (std::find(m_directories.begin(), m_directories.end(), dir_path) == m_directories.end()) {
+    m_snap_sync_stats.erase(dir_path);
   }
 }
 
-int PeerReplayer::try_lock_directory(std::string_view dir_path,
+int PeerReplayer::try_lock_directory(const std::string &dir_path,
                                      SnapshotReplayerThread *replayer, DirRegistry *registry) {
   dout(20) << ": dir_path=" << dir_path << dendl;
 
-  std::string _dir_path(dir_path);
-  int r = ceph_open(m_remote_mount, _dir_path.c_str(), O_RDONLY | O_DIRECTORY, 0);
+  int r = ceph_open(m_remote_mount, dir_path.c_str(), O_RDONLY | O_DIRECTORY, 0);
   if (r < 0 && r != -ENOENT) {
     derr << ": failed to open remote dir_path=" << dir_path << ": " << cpp_strerror(r)
          << dendl;
@@ -311,14 +309,14 @@ int PeerReplayer::try_lock_directory(std::string_view dir_path,
 
   if (r == -ENOENT) {
     // we snap under dir_path, so mode does not matter much
-    r = ceph_mkdirs(m_remote_mount, _dir_path.c_str(), 0755);
+    r = ceph_mkdirs(m_remote_mount, dir_path.c_str(), 0755);
     if (r < 0) {
-      derr << ": failed to create remote directory=" << _dir_path << ": " << cpp_strerror(r)
+      derr << ": failed to create remote directory=" << dir_path << ": " << cpp_strerror(r)
            << dendl;
       return r;
     }
 
-    r = ceph_open(m_remote_mount, _dir_path.c_str(), O_RDONLY | O_DIRECTORY, 0);
+    r = ceph_open(m_remote_mount, dir_path.c_str(), O_RDONLY | O_DIRECTORY, 0);
     if (r < 0) {
       derr << ": failed to open remote dir_path=" << dir_path << ": " << cpp_strerror(r)
            << dendl;
@@ -351,7 +349,7 @@ int PeerReplayer::try_lock_directory(std::string_view dir_path,
   return 0;
 }
 
-void PeerReplayer::unlock_directory(std::string_view dir_path, const DirRegistry &registry) {
+void PeerReplayer::unlock_directory(const std::string &dir_path, const DirRegistry &registry) {
   dout(20) << ": dir_path=" << dir_path << dendl;
 
   int r = ceph_flock(m_remote_mount, registry.fd, LOCK_UN,
@@ -371,9 +369,9 @@ void PeerReplayer::unlock_directory(std::string_view dir_path, const DirRegistry
   dout(10) << ": dir_path=" << dir_path << " unlocked" << dendl;
 }
 
-int PeerReplayer::build_snap_map(std::string_view dir_path,
+int PeerReplayer::build_snap_map(const std::string &dir_path,
                                  std::map<uint64_t, std::string> *snap_map, bool is_remote) {
-  auto snap_dir = snapshot_dir_path(m_cct, std::string(dir_path));
+  auto snap_dir = snapshot_dir_path(m_cct, dir_path);
   dout(20) << ": dir_path=" << dir_path << ", snap_dir=" << snap_dir
            << ", is_remote=" << is_remote << dendl;
 
@@ -454,14 +452,14 @@ int PeerReplayer::build_snap_map(std::string_view dir_path,
   return rv;
 }
 
-int PeerReplayer::propagate_snap_deletes(std::string_view dir_path, const std::set<std::string> &snaps) {
+int PeerReplayer::propagate_snap_deletes(const std::string &dir_path,
+                                         const std::set<std::string> &snaps) {
   dout(5) << ": dir_path=" << dir_path << ", deleted snapshots=" << snaps << dendl;
 
-  auto _dir_path = std::string(dir_path);
   for (auto &snap : snaps) {
     dout(20) << ": deleting dir_path=" << dir_path << ", snapshot=" << snap
              << dendl;
-    int r = ceph_rmsnap(m_remote_mount, _dir_path.c_str(), snap.c_str());
+    int r = ceph_rmsnap(m_remote_mount, dir_path.c_str(), snap.c_str());
     if (r < 0) {
       derr << ": failed to delete remote snap dir_path=" << dir_path
            << ", snapshot=" << snaps << ": " << cpp_strerror(r) << dendl;
@@ -474,14 +472,13 @@ int PeerReplayer::propagate_snap_deletes(std::string_view dir_path, const std::s
 }
 
 int PeerReplayer::propagate_snap_renames(
-    std::string_view dir_path,
+    const std::string &dir_path,
     const std::set<std::pair<std::string,std::string>> &snaps) {
   dout(10) << ": dir_path=" << dir_path << ", renamed snapshots=" << snaps << dendl;
 
-  auto _dir_path = std::string(dir_path);
   for (auto &snapp : snaps) {
-    auto from = snapshot_path(m_cct, _dir_path, snapp.first);
-    auto to = snapshot_path(m_cct, _dir_path, snapp.second);
+    auto from = snapshot_path(m_cct, dir_path, snapp.first);
+    auto to = snapshot_path(m_cct, dir_path, snapp.second);
     dout(20) << ": renaming dir_path=" << dir_path << ", snapshot from="
              << from << ", to=" << to << dendl;
     int r = ceph_rename(m_remote_mount, from.c_str(), to.c_str());
@@ -897,24 +894,22 @@ int PeerReplayer::do_synchronize(const std::string &dir_path, const std::string 
   return r;
 }
 
-int PeerReplayer::synchronize(std::string_view dir_path, uint64_t snap_id,
-                              std::string_view snap_name) {
+int PeerReplayer::synchronize(const std::string &dir_path, uint64_t snap_id,
+                              const std::string &snap_name) {
   dout(20) << ": dir_path=" << dir_path << ", snap_id=" << snap_id
            << ", snap_name=" << snap_name << dendl;
 
-  auto _dir_path = std::string(dir_path);
-  auto _snap_name = std::string(snap_name);
-  auto snap_path = snapshot_path(m_cct, _dir_path, _snap_name);
+  auto snap_path = snapshot_path(m_cct, dir_path, snap_name);
 
-  int r = cleanup_remote_dir(_dir_path);
+  int r = cleanup_remote_dir(dir_path);
   if (r < 0) {
-    derr << ": failed to cleanup remote directory=" << _dir_path << dendl;
+    derr << ": failed to cleanup remote directory=" << dir_path << dendl;
     return r;
   }
 
-  r = do_synchronize(_dir_path, _snap_name);
+  r = do_synchronize(dir_path, snap_name);
   if (r < 0) {
-    derr << ": failed to synchronize dir_path=" << _dir_path << ", snapshot="
+    derr << ": failed to synchronize dir_path=" << dir_path << ", snapshot="
          << snap_path << dendl;
     return r;
   }
@@ -929,7 +924,7 @@ int PeerReplayer::synchronize(std::string_view dir_path, uint64_t snap_id,
 
   dout(5) << ": remote snapshot dir_path=" << dir_path << ", snap_name=" << snap_name
           << ", metadata=" << metadata << dendl;
-  r = ceph_mksnap(m_remote_mount, _dir_path.c_str(), _snap_name.c_str(), 0755,
+  r = ceph_mksnap(m_remote_mount, dir_path.c_str(), snap_name.c_str(), 0755,
                   metadata_dict);
   if (r < 0) {
     derr << ": failed to snap remote directory dir_path=" << dir_path
@@ -940,7 +935,7 @@ int PeerReplayer::synchronize(std::string_view dir_path, uint64_t snap_id,
   return r;
 }
 
-int PeerReplayer::do_sync_snaps(std::string_view dir_path) {
+int PeerReplayer::do_sync_snaps(const std::string &dir_path) {
   dout(20) << ": dir_path=" << dir_path << dendl;
 
   std::map<uint64_t, std::string> local_snap_map;
@@ -1021,7 +1016,7 @@ int PeerReplayer::do_sync_snaps(std::string_view dir_path) {
   return 0;
 }
 
-void PeerReplayer::sync_snaps(std::string_view dir_path,
+void PeerReplayer::sync_snaps(const std::string &dir_path,
                               std::unique_lock<ceph::mutex> &locker) {
   dout(20) << ": dir_path=" << dir_path << dendl;
   locker.unlock();
