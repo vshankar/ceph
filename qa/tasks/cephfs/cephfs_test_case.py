@@ -192,7 +192,7 @@ class CephFSTestCase(CephTestCase):
                                                 'enable_multiple', 'true',
                                                 '--yes-i-really-mean-it')
             self.backup_fs = self.mds_cluster.newfs(name="backup_fs")
-            self.fs.wait_for_daemons()
+            self.backup_fs.wait_for_daemons()
 
         if self.REQUIRE_RECOVERY_FILESYSTEM:
             if not self.REQUIRE_FILESYSTEM:

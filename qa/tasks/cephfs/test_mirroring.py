@@ -12,7 +12,8 @@ from teuthology.contextutil import safe_while
 log = logging.getLogger(__name__)
 
 class TestMirroring(CephFSTestCase):
-    MDSS_REQUIRED = 5
+    MDSS_REQUIRED = 3
+    CLIENTS_REQUIRED = 2
     REQUIRE_BACKUP_FILESYSTEM = True
 
     MODULE_NAME = "mirroring"
@@ -117,6 +118,28 @@ class TestMirroring(CephFSTestCase):
         log.debug(f'new dir_count={new_dir_count}')
         self.assertTrue(new_dir_count < dir_count)
 
+    def check_peer_status(self, fs_name, fs_id, peer_spec, dir_name, expected_snap_name,
+                          expected_snap_count=1, expected_delete_count=0):
+        peer_uuid = self.get_peer_uuid(peer_spec)
+        res = self.mirror_daemon_command(f'peer status for fs: {fs_name}',
+                                         'fs', 'mirror', 'peer', 'status',
+                                         f'{fs_name}@{fs_id}', peer_uuid)
+        self.assertTrue(dir_name in res)
+        self.assertTrue(res[dir_name]['last_synced_snap']['name'] == expected_snap_name)
+        self.assertTrue(res[dir_name]['snaps_synced'] == expected_snap_count)
+        self.assertTrue(res[dir_name]['snaps_deleted'] == expected_delete_count)
+
+    def verify_snapshot(self, dir_name, snap_name):
+        snap_list = self.mount_b.ls(path=f'{dir_name}/.snap')
+        self.assertTrue(snap_name in snap_list)
+
+        source_res = self.mount_a.dir_checksum(path=f'{dir_name}/.snap/{snap_name}')
+        log.debug(f'source snapshot checksum {snap_name} {source_res}')
+
+        dest_res = self.mount_b.dir_checksum(path=f'{dir_name}/.snap/{snap_name}')
+        log.debug(f'destination snapshot checksum {snap_name} {dest_res}')
+        self.assertTrue(source_res == dest_res)
+
     def get_peer_uuid(self, peer_spec):
         status = self.fs.status()
         fs_map = status.get_fsmap_byname(self.primary_fs_name)
@@ -163,11 +186,11 @@ class TestMirroring(CephFSTestCase):
         log.debug(f'command returned={res}')
         return json.loads(res)
 
-    def test_basic_mirror_commands(self):
+    def _test_basic_mirror_commands(self):
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
         self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
 
-    def test_mirror_peer_commands(self):
+    def _test_mirror_peer_commands(self):
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
 
         # add peer
@@ -177,7 +200,7 @@ class TestMirroring(CephFSTestCase):
 
         self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
 
-    def test_mirror_disable_with_peer(self):
+    def _test_mirror_disable_with_peer(self):
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
 
         # add peer
@@ -185,7 +208,7 @@ class TestMirroring(CephFSTestCase):
 
         self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
 
-    def test_matching_peer(self):
+    def _test_matching_peer(self):
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
 
         try:
@@ -217,7 +240,7 @@ class TestMirroring(CephFSTestCase):
 
         self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
 
-    def test_mirror_peer_add_existing(self):
+    def _test_mirror_peer_add_existing(self):
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
 
         # add peer
@@ -231,7 +254,7 @@ class TestMirroring(CephFSTestCase):
 
         self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
 
-    def test_peer_commands_with_mirroring_disabled(self):
+    def _test_peer_commands_with_mirroring_disabled(self):
         # try adding peer when mirroring is not enabled
         try:
             self.peer_add(self.primary_fs_name, self.primary_fs_id, "client.mirror_remote@ceph", self.secondary_fs_name)
@@ -250,7 +273,7 @@ class TestMirroring(CephFSTestCase):
         else:
             raise RuntimeError(-errno.EINVAL, 'expected peer_remove to fail')
 
-    def test_add_directory_with_mirroring_disabled(self):
+    def _test_add_directory_with_mirroring_disabled(self):
         # try adding a directory when mirroring is not enabled
         try:
             self.add_directory(self.primary_fs_name, self.primary_fs_id, "/d1")
@@ -260,7 +283,7 @@ class TestMirroring(CephFSTestCase):
         else:
             raise RuntimeError(-errno.EINVAL, 'expected directory add to fail')
 
-    def test_directory_commands(self):
+    def _test_directory_commands(self):
         self.mount_a.run_shell(["mkdir", "d1"])
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
         self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d1')
@@ -282,7 +305,7 @@ class TestMirroring(CephFSTestCase):
         self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
         self.mount_a.run_shell(["rmdir", "d1"])
 
-    def test_add_non_existing_directory(self):
+    def _test_add_non_existing_directory(self):
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
         try:
             self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d1')
@@ -293,7 +316,7 @@ class TestMirroring(CephFSTestCase):
             raise RuntimeError(-errno.EINVAL, 'expected directory add to fail')
         self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
 
-    def test_add_relative_directory_path(self):
+    def _test_add_relative_directory_path(self):
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
         try:
             self.add_directory(self.primary_fs_name, self.primary_fs_id, './d1')
@@ -304,7 +327,7 @@ class TestMirroring(CephFSTestCase):
             raise RuntimeError(-errno.EINVAL, 'expected directory add to fail')
         self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
 
-    def test_add_non_directory(self):
+    def _test_add_non_directory(self):
         self.mount_a.run_shell(["touch", "test"])
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
         try:
@@ -317,7 +340,7 @@ class TestMirroring(CephFSTestCase):
         self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
         self.mount_a.run_shell(["rm", "test"])
 
-    def test_add_directory_path_normalization(self):
+    def _test_add_directory_path_normalization(self):
         self.mount_a.run_shell(["mkdir", "-p", "d1/d2/d3"])
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
         self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d1/d2/d3')
@@ -340,7 +363,7 @@ class TestMirroring(CephFSTestCase):
         self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
         self.mount_a.run_shell(["rm", "-rf", "d1"])
 
-    def test_add_ancestor_and_child_directory(self):
+    def _test_add_ancestor_and_child_directory(self):
         self.mount_a.run_shell(["mkdir", "-p", "d1/d2/d3"])
         self.mount_a.run_shell(["mkdir", "-p", "d1/d4"])
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
@@ -365,7 +388,7 @@ class TestMirroring(CephFSTestCase):
         self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
         self.mount_a.run_shell(["rm", "-rf", "d1"])
 
-    def test_cephfs_mirror_blocklist(self):
+    def _test_cephfs_mirror_blocklist(self):
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
 
         # add peer
@@ -409,4 +432,51 @@ class TestMirroring(CephFSTestCase):
         peers_2 = set(res['peers'])
         self.assertTrue(peers_1, peers_2)
 
+        self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
+
+    def test_cephfs_mirror_stats(self):
+        log.debug('reconfigure client auth caps')
+        self.mds_cluster.mon_manager.raw_cluster_cmd_result(
+            'auth', 'caps', "client.{0}".format(self.mount_b.client_id),
+                'mds', 'allow rw',
+                'mon', 'allow r',
+                'osd', 'allow rw pool={0}, allow rw pool={1}'.format(
+                    self.backup_fs.get_data_pool_name(), self.backup_fs.get_data_pool_name()))
+
+        log.debug(f'mounting filesystem {self.secondary_fs_name}')
+        self.mount_b.umount_wait()
+        self.mount_b.mount(cephfs_name=self.secondary_fs_name)
+
+        # create a bunch of files in a directory to snap
+        self.mount_a.run_shell(["mkdir", "d0"])
+        self.mount_a.create_n_files('d0/file', 50, sync=True)
+
+        self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
+        self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d0')
+        self.peer_add(self.primary_fs_name, self.primary_fs_id, "client.mirror_remote@ceph", self.secondary_fs_name)
+
+        # take a snapshot
+        self.mount_a.run_shell(["mkdir", "d0/.snap/snap0"])
+
+        time.sleep(10)
+        self.check_peer_status(self.primary_fs_name, self.primary_fs_id,
+                               "client.mirror_remote@ceph", '/d0', 'snap0', expected_snap_count=1)
+        self.verify_snapshot('d0', 'snap0')
+
+        # some more IO
+        self.mount_a.run_shell(["mkdir", "d0/d00"])
+        self.mount_a.run_shell(["mkdir", "d0/d01"])
+
+        self.mount_a.create_n_files('d0/d00/more_file', 20, sync=True)
+        self.mount_a.create_n_files('d0/d01/some_more_file', 75, sync=True)
+
+        # take a snapshot
+        self.mount_a.run_shell(["mkdir", "d0/.snap/snap1"])
+
+        time.sleep(30)
+        self.check_peer_status(self.primary_fs_name, self.primary_fs_id,
+                               "client.mirror_remote@ceph", '/d0', 'snap1', expected_snap_count=2)
+        self.verify_snapshot('d0', 'snap1')
+
+        self.remove_directory(self.primary_fs_name, self.primary_fs_id, '/d0')
         self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
