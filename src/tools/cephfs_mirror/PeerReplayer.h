@@ -59,8 +59,17 @@ private:
       return 0;
     }
 
+    void cancel() {
+      canceled = true;
+    }
+
+    bool is_canceled() const {
+      return canceled;
+    }
+
   private:
     PeerReplayer *m_peer_replayer;
+    bool canceled = false;
   };
 
   struct DirRegistry {
@@ -135,6 +144,12 @@ private:
     ++sync_stat.synced_snap_count;
   }
 
+  bool should_backoff(const std::string &dir_path) {
+    std::scoped_lock locker(m_lock);
+    auto &dr = m_registered.at(dir_path);
+    return dr.replayer->is_canceled();
+  }
+
   typedef std::vector<std::unique_ptr<SnapshotReplayerThread>> SnapshotReplayers;
 
   CephContext *m_cct;
@@ -176,9 +191,12 @@ private:
   int cleanup_remote_dir(const std::string &dir_path);
   int remote_mkdir(const std::string &local_path, const std::string &remote_path,
                    const struct ceph_statx &stx);
-  int remote_file_op(const std::string &local_path, const std::string &remote_path,
-                     const struct ceph_statx &stx);
-  int remote_copy(const std::string &local_path,const std::string &remote_path,
+  int remote_file_op(const std::string &dir_path,
+                     const std::string &local_path,
+                     const std::string &remote_path, const struct ceph_statx &stx);
+  int remote_copy(const std::string &dir_path,
+                  const std::string &local_path,
+                  const std::string &remote_path,
                   const struct ceph_statx &local_stx);
 };
 
