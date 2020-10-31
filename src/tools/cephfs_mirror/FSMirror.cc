@@ -117,7 +117,6 @@ int FSMirror::init_replayer(PeerReplayer *peer_replayer) {
 }
 
 void FSMirror::shutdown_replayer(PeerReplayer *peer_replayer) {
-  ceph_assert(ceph_mutex_is_locked(m_lock));
   peer_replayer->shutdown();
 }
 
@@ -183,14 +182,13 @@ void FSMirror::shutdown(Context *on_finish) {
     }
 
     m_on_shutdown_finish = on_finish;
-
-    for (auto &[peer, peer_replayer] : m_peer_replayers) {
-      dout(5) << ": shutting down replayer for peer=" << peer << dendl;
-      shutdown_replayer(peer_replayer.get());
-    }
-    m_peer_replayers.clear();
   }
 
+  for (auto &[peer, peer_replayer] : m_peer_replayers) {
+      dout(5) << ": shutting down replayer for peer=" << peer << dendl;
+      shutdown_replayer(peer_replayer.get());
+  }
+  m_peer_replayers.clear();
   shutdown_mirror_watcher();
 }
 
@@ -353,13 +351,20 @@ void FSMirror::add_peer(const Peer &peer) {
 void FSMirror::remove_peer(const Peer &peer) {
   dout(10) << ": peer=" << peer << dendl;
 
-  std::scoped_lock locker(m_lock);
-  m_all_peers.erase(peer);
-  auto it = m_peer_replayers.find(peer);
-  if (it != m_peer_replayers.end()) {
+  std::unique_ptr<PeerReplayer> replayer;
+  {
+    std::scoped_lock locker(m_lock);
+    m_all_peers.erase(peer);
+    auto it = m_peer_replayers.find(peer);
+    if (it != m_peer_replayers.end()) {
+      replayer = std::move(it->second);
+      m_peer_replayers.erase(it);
+    }
+  }
+
+  if (replayer) {
     dout(5) << ": shutting down replayers for peer=" << peer << dendl;
-    shutdown_replayer(it->second.get());
-    m_peer_replayers.erase(it);
+    shutdown_replayer(replayer.get());
   }
 }
 

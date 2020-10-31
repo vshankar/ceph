@@ -13,8 +13,8 @@ from teuthology.contextutil import safe_while
 log = logging.getLogger(__name__)
 
 class TestMirroring(CephFSTestCase):
-    MDSS_REQUIRED = 5
-    CLIENTS_REQUIRED = 2
+    MDSS_REQUIRED = 3
+    CLIENTS_REQUIRED = 1
     REQUIRE_BACKUP_FILESYSTEM = True
 
     MODULE_NAME = "mirroring"
@@ -140,14 +140,26 @@ class TestMirroring(CephFSTestCase):
         self.assertTrue(res[dir_name]['current_sycning_snap']['name'] == snap_name)
 
     def verify_snapshot(self, dir_name, snap_name):
-        snap_list = self.mount_b.ls(path=f'{dir_name}/.snap')
+        source_res = self.mount_a.dir_checksum(path=f'{dir_name}/.snap/{snap_name}')
+        print(f'source snapshot checksum {snap_name} {source_res}')
+
+        print('reconfigure client auth caps')
+        self.mds_cluster.mon_manager.raw_cluster_cmd_result(
+            'auth', 'caps', "client.{0}".format(self.mount_a.client_id),
+                'mds', 'allow rw',
+                'mon', 'allow r',
+                'osd', 'allow rw pool={0}, allow rw pool={1}'.format(
+                    self.backup_fs.get_data_pool_name(), self.backup_fs.get_data_pool_name()))
+
+        print(f'mounting filesystem {self.secondary_fs_name}')
+        self.mount_a.umount_wait()
+        self.mount_a.mount(cephfs_name=self.secondary_fs_name)
+
+        snap_list = self.mount_a.ls(path=f'{dir_name}/.snap')
         self.assertTrue(snap_name in snap_list)
 
-        source_res = self.mount_a.dir_checksum(path=f'{dir_name}/.snap/{snap_name}')
-        log.debug(f'source snapshot checksum {snap_name} {source_res}')
-
-        dest_res = self.mount_b.dir_checksum(path=f'{dir_name}/.snap/{snap_name}')
-        log.debug(f'destination snapshot checksum {snap_name} {dest_res}')
+        dest_res = self.mount_a.dir_checksum(path=f'{dir_name}/.snap/{snap_name}')
+        print(f'destination snapshot checksum {snap_name} {dest_res}')
         self.assertTrue(source_res == dest_res)
 
     def get_peer_uuid(self, peer_spec):
@@ -540,4 +552,63 @@ class TestMirroring(CephFSTestCase):
 
         snap_list = self.mount_b.ls(path='d0/.snap')
         self.assertTrue('snap0' not in snap_list)
+        self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
+
+    def test_cephfs_mirror_restart_sync_on_blocklist(self):
+        #log.debug('reconfigure client auth caps')
+        #self.mds_cluster.mon_manager.raw_cluster_cmd_result(
+        #    'auth', 'caps', "client.{0}".format(self.mount_b.client_id),
+        #        'mds', 'allow rw',
+        #        'mon', 'allow r',
+        #        'osd', 'allow rw pool={0}, allow rw pool={1}'.format(
+        #            self.backup_fs.get_data_pool_name(), self.backup_fs.get_data_pool_name()))
+
+        #log.debug(f'mounting filesystem {self.secondary_fs_name}')
+        #self.mount_b.umount_wait()
+        #self.mount_b.mount(cephfs_name=self.secondary_fs_name)
+
+        # create a bunch of files in a directory to snap
+        self.mount_a.run_shell(["mkdir", "d0"])
+        for i in range(4):
+            filename = f'file.{i}'
+            self.mount_a.write_n_mb(os.path.join('d0', filename), 100)
+
+        self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
+        self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d0')
+        self.peer_add(self.primary_fs_name, self.primary_fs_id, "client.mirror_remote@ceph", self.secondary_fs_name)
+
+        # fetch rados address for blacklist check
+        rados_inst = self.get_mirror_rados_addr(self.primary_fs_name, self.primary_fs_id)
+
+        # take a snapshot
+        self.mount_a.run_shell(["mkdir", "d0/.snap/snap0"])
+
+        time.sleep(10)
+        self.check_peer_snap_in_progress(self.primary_fs_name, self.primary_fs_id,
+                                         "client.mirror_remote@ceph", '/d0', 'snap0')
+
+        # simulate non-responding mirror daemon by sending SIGSTOP
+        pid = self.get_mirror_daemon_pid()
+        log.debug(f'SIGSTOP to cephfs-mirror pid {pid}')
+        self.mount_a.run_shell(['kill', '-SIGSTOP', pid])
+
+        # wait for blocklist timeout -- the manager module would blocklist
+        # the mirror daemon
+        time.sleep(40)
+
+        # wake up the mirror daemon -- at this point, the daemon should know
+        # that it has been blocklisted
+        log.debug(f'SIGCONT to cephfs-mirror')
+        self.mount_a.run_shell(['kill', '-SIGCONT', pid])
+
+        # check if the rados addr is blocklisted
+        blocklist = self.get_blocklisted_instances()
+        self.assertTrue(rados_inst in blocklist)
+
+        time.sleep(120)
+        self.check_peer_status(self.primary_fs_name, self.primary_fs_id,
+                               "client.mirror_remote@ceph", '/d0', 'snap0', expected_snap_count=1)
+        self.verify_snapshot('d0', 'snap0')
+
+        self.remove_directory(self.primary_fs_name, self.primary_fs_id, '/d0')
         self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)

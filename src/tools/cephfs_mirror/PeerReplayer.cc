@@ -223,6 +223,7 @@ void PeerReplayer::shutdown() {
   }
   m_replayers.clear();
   ceph_unmount(m_remote_mount);
+  m_remote_mount = nullptr;
   m_remote_cluster.reset();
 }
 
@@ -566,8 +567,8 @@ int PeerReplayer::remote_copy(const std::string &dir_path,
   }
 
   while (true) {
-    if (should_backoff(dir_path)) {
-      r = -ECANCELED;
+    if (should_backoff(dir_path, &r)) {
+      dout(0) << ": backing off r=" << r << dendl;
       break;
     }
 
@@ -696,7 +697,7 @@ int PeerReplayer::cleanup_remote_dir(const std::string &dir_path) {
   }
 
   struct ceph_statx tstx;
-  r = ceph_statx(m_local_mount, dir_path.c_str(), &tstx,
+  r = ceph_statx(m_remote_mount, dir_path.c_str(), &tstx,
                  CEPH_STATX_MODE | CEPH_STATX_UID | CEPH_STATX_GID |
                  CEPH_STATX_SIZE | CEPH_STATX_ATIME | CEPH_STATX_MTIME,
                  AT_NO_ATTR_SYNC | AT_SYMLINK_NOFOLLOW);
@@ -708,8 +709,8 @@ int PeerReplayer::cleanup_remote_dir(const std::string &dir_path) {
 
   rm_stack.emplace(SyncEntry(dir_path, tdirp, tstx));
   while (!rm_stack.empty()) {
-    if (should_backoff(dir_path)) {
-      r = -ECANCELED;
+    if (should_backoff(dir_path, &r)) {
+      dout(0) << ": backing off r=" << r << dendl;
       break;
     }
 
@@ -788,7 +789,7 @@ int PeerReplayer::cleanup_remote_dir(const std::string &dir_path) {
     auto &entry = rm_stack.top();
     if (entry.is_directory()) {
       dout(20) << ": closing remote directory=" << entry.epath << dendl;
-      if (ceph_closedir(m_local_mount, entry.dirp) < 0) {
+      if (ceph_closedir(m_remote_mount, entry.dirp) < 0) {
         derr << ": failed to close remote directory=" << entry.epath << dendl;
       }
     }
@@ -826,8 +827,8 @@ int PeerReplayer::do_synchronize(const std::string &dir_path, const std::string 
 
   sync_stack.emplace(SyncEntry("/", tdirp, tstx));
   while (!sync_stack.empty()) {
-    if (should_backoff(dir_path)) {
-      r = -ECANCELED;
+    if (should_backoff(dir_path, &r)) {
+      dout(0) << ": backing off r=" << r << dendl;
       break;
     }
 
@@ -1016,7 +1017,7 @@ int PeerReplayer::do_sync_snaps(const std::string &dir_path) {
   }
 
   auto snaps_per_cycle = g_ceph_context->_conf.get_val<uint64_t>(
-    "cephfs_max_snapshot_sync_per_cycle");
+    "cephfs_mirror_max_snapshot_sync_per_cycle");
 
   dout(10) << ": synzhronizing from snap-id=" << it->first << dendl;
   for (; it != local_snap_map.end(); ++it) {
@@ -1026,6 +1027,7 @@ int PeerReplayer::do_sync_snaps(const std::string &dir_path) {
     if (r < 0) {
       derr << ": failed to synchronize dir_path=" << dir_path
            << ", snapshot=" << it->second << dendl;
+      clear_current_syncing_snap(dir_path);
       return r;
     }
     std::chrono::duration<double> duration = clock::now() - start;
@@ -1052,11 +1054,14 @@ void PeerReplayer::sync_snaps(const std::string &dir_path,
 void PeerReplayer::run(SnapshotReplayerThread *replayer) {
   dout(10) << ": snapshot replayer=" << replayer << dendl;
 
+  time last_directory_scan = clock::zero();
+  auto scan_interval = g_ceph_context->_conf.get_val<uint64_t>(
+    "cephfs_mirror_directory_scan_interval");
+
   std::unique_lock locker(m_lock);
   while (true) {
-    dout(20) << ": trying to pick from " << m_directories.size() << " directories" << dendl;
     // do not check if client is blocklisted under lock
-    m_cond.wait_for(locker, 1s, [this]{return m_directories.size() || is_stopping();});
+    m_cond.wait_for(locker, 1s, [this]{return is_stopping();});
     if (is_stopping()) {
       dout(5) << ": exiting" << dendl;
       break;
@@ -1071,7 +1076,10 @@ void PeerReplayer::run(SnapshotReplayerThread *replayer) {
 
     locker.lock();
 
-    if (m_directories.size()) {
+    auto now = clock::now();
+    std::chrono::duration<double> timo = now - last_directory_scan;
+    if (timo.count() >= scan_interval && m_directories.size()) {
+      dout(20) << ": trying to pick from " << m_directories.size() << " directories" << dendl;
       auto dir_path = pick_directory();
       if (dir_path) {
         dout(5) << ": picked dir_path=" << *dir_path << dendl;
@@ -1081,11 +1089,9 @@ void PeerReplayer::run(SnapshotReplayerThread *replayer) {
           unregister_directory(*dir_path);
         }
       }
-    }
 
-    locker.unlock();
-    ::sleep(1);
-    locker.lock();
+      last_directory_scan = now;
+    }
   }
 }
 

@@ -129,6 +129,11 @@ private:
     auto &sync_stat = m_snap_sync_stats.at(dir_path);
     sync_stat.current_syncing_snap = std::make_pair(snap_id, snap_name);
   }
+  void clear_current_syncing_snap(const std::string &dir_path) {
+    std::scoped_lock locker(m_lock);
+    auto &sync_stat = m_snap_sync_stats.at(dir_path);
+    sync_stat.current_syncing_snap = boost::none;
+  }
   void inc_deleted_snap(const std::string &dir_path) {
     std::scoped_lock locker(m_lock);
     auto &sync_stat = m_snap_sync_stats.at(dir_path);
@@ -144,10 +149,27 @@ private:
     ++sync_stat.synced_snap_count;
   }
 
-  bool should_backoff(const std::string &dir_path) {
+  bool should_backoff(const std::string &dir_path, int *retval) {
+    if (m_fs_mirror->is_blocklisted()) {
+      *retval = -EBLOCKLISTED;
+      return true;
+    }
+
     std::scoped_lock locker(m_lock);
+    if (is_stopping()) {
+      // ceph defines EBLOCKLISTED to ESHUTDOWN (108). so use
+      // EINPROGRESS to identify shutdown.
+      *retval = -EINPROGRESS;
+      return true;
+    }
     auto &dr = m_registered.at(dir_path);
-    return dr.replayer->is_canceled();
+    if (dr.replayer->is_canceled()) {
+      *retval = -ECANCELED;
+      return true;
+    }
+
+    *retval = 0;
+    return false;
   }
 
   typedef std::vector<std::unique_ptr<SnapshotReplayerThread>> SnapshotReplayers;
