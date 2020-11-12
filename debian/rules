@@ -22,6 +22,7 @@ extraopts += -DWITH_MGR_DASHBOARD_FRONTEND=OFF
 extraopts += -DWITH_PYTHON3=3
 extraopts += -DWITH_CEPHFS_JAVA=ON
 extraopts += -DWITH_CEPHFS_SHELL=ON
+extraopts += -DWITH_CEPHFS_TOP=ON
 extraopts += -DWITH_SYSTEMD=ON -DCEPH_SYSTEMD_ENV_DIR=/etc/default
 extraopts += -DWITH_GRAFANA=ON
 # assumes that ceph is exmpt from multiarch support, so we override the libdir.
@@ -126,6 +127,7 @@ override_dh_python3:
 	dh_python3 -p python3-ceph-argparse
 	dh_python3 -p python3-ceph-common
 	dh_python3 -p cephfs-shell
+	dh_python3 -p cephfs-top
 	dh_python3 -p cephadm
 
 # do not run tests
