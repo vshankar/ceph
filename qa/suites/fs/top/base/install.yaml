@@ -1,0 +1,6 @@
+meta:
+- desc: install cephfs-top package in cluster
+tasks:
+- install:
+    extra_packages: [cephfs-top]
+- ceph:
