@@ -1,0 +1,6 @@
+meta:
+- desc: configure the permissions for client.fstop
+tasks:
+- exec:
+    client.admin:
+      - "sudo ceph auth caps client.admin mon 'allow r' mds 'allow r' osd 'allow r' mgr 'allow rw'"
