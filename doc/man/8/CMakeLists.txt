@@ -39,7 +39,8 @@ list(APPEND man_srcs
   ${mon_srcs}
   ceph-mds.rst
   librados-config.rst
-  cephadm.rst)
+  cephadm.rst
+  cephfs-mirror.rst)
 
 if(HAVE_LIBFUSE)
   list(APPEND man_srcs
