@@ -32,7 +32,7 @@ Creating Users
 Start by creating a user (on the primary/local cluster) for the mirror daemon. This user
 has restrictive capabilities on the MDS and the OSD::
 
-  $ ceph auth get-or-create client.mirror mon 'allow r' mds 'allow r' osd 'allow rw tag cephfs metadata=*, allow r tag cephfs data=*' mgr 'allow r'
+  $ ceph auth get-or-create client.mirror mon 'allow profile cephfs-mirror' mds 'allow r' osd 'allow rw tag cephfs metadata=*, allow r tag cephfs data=*' mgr 'allow r'
 
 Create a user for each file system peer (on the secondary/remote cluster). This user needs
 to have full capabilities on the MDS (to take snapshots) and the OSDs::
