@@ -121,10 +121,18 @@ void FSMirror::shutdown_replayer(PeerReplayer *peer_replayer) {
 
 void FSMirror::cleanup() {
   dout(20) << dendl;
+  dout(20) << ": umounting" << dendl;
   ceph_unmount(m_mount);
+  dout(20) << ": umounted" << dendl;
+  dout(20) << ": releasing" << dendl;
   ceph_release(m_mount);
+  dout(20) << ": released" << dendl;
+  dout(20) << ": ioctx closing" << dendl;
   m_ioctx.close();
+  dout(20) << ": ioctx closed" << dendl;
+  dout(20) << ": cluster resetting" << dendl;
   m_cluster.reset();
+  dout(20) << ": cluster reseted" << dendl;
 }
 
 void FSMirror::init(Context *on_finish) {
