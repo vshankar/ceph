@@ -100,6 +100,7 @@ private:
   std::map<Filesystem, MirrorAction> m_mirror_actions;
 
   utime_t m_last_blocklist_check;
+  utime_t m_last_failure_check;
 
   int init_mon_client();
 
