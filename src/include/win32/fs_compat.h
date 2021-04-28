@@ -31,5 +31,7 @@
 #define LOCK_RW    192
 
 #define AT_SYMLINK_NOFOLLOW 0x100
+#define AT_REMOVEDIR        0x200 /* Remove directory instead of
+                                     unlinking file.  */
 
 #define MAXSYMLINKS  65000
