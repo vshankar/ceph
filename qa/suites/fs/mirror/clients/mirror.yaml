@@ -5,6 +5,7 @@ overrides:
     conf:
       client:
         debug cephfs_mirror: 20
+        debug asok: 20
         log to stderr: false
       # make these predictable
       client.mirror:
