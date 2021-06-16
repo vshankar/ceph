@@ -1268,3 +1268,73 @@ class TestMirroring(CephFSTestCase):
         self.verify_snapshot('d2', 'snap0')
 
         self.disable_mirroring(self.primary_fs_name, self.primary_fs_id)
+
+
+class TestMirroringHA(CephFSTestCase):
+    MDSS_REQUIRED = 5
+    CLIENTS_REQUIRED = 2
+    REQUIRE_BACKUP_FILESYSTEM = True
+
+    MODULE_NAME = "mirroring"
+
+    def setUp(self):
+        super(TestMirroringHA, self).setUp()
+        self.primary_fs_name = self.fs.name
+        self.primary_fs_id = self.fs.id
+        self.secondary_fs_name = self.backup_fs.name
+        self.secondary_fs_id = self.backup_fs.id
+
+    def test_snapshot_sync(self):
+        """ Test snapshot synchronization w/ active-active cephfs-mirror daemons """
+
+        log.debug('reconfigure client auth caps')
+        self.mds_cluster.mon_manager.raw_cluster_cmd_result(
+            'auth', 'caps', "client.{0}".format(self.mount_b.client_id),
+            'mds', 'allow rw',
+            'mon', 'allow r',
+            'osd', 'allow rw pool={0}, allow rw pool={1}'.format(
+                self.backup_fs.get_data_pool_name(), self.backup_fs.get_data_pool_name()))
+        log.debug(f'mounting filesystem {self.secondary_fs_name}')
+        self.mount_b.umount_wait()
+        self.mount_b.mount_wait(cephfs_name=self.secondary_fs_name)
+
+        repo = 'ceph-qa-suite'
+        repo_dir = 'ceph_repo'
+        repo_path = f'{repo_dir}/{repo}'
+
+        def clone_repo():
+            self.mount_a.run_shell([
+                'git', 'clone', '--branch', 'giant',
+                f'http://github.com/ceph/{repo}', repo_path])
+
+        self.mount_a.run_shell(["mkdir", repo_dir])
+        clone_repo()
+
+        self.mgr_cluster.mon_manager.raw_cluster_cmd("mgr", "module", "enable", TestMirroringHA.MODULE_NAME)
+        self.mgr_cluster.mon_manager.raw_cluster_cmd("fs", "snapshot", "mirror", "enable", self.primary_fs_name)
+        self.mgr_cluster.mon_manager.raw_cluster_cmd("fs", "snapshot", "mirror", "peer_add", self.primary_fs_name,
+                                                     "client.mirror_remote@ceph", self.secondary_fs_name)
+
+        self.mgr_cluster.mon_manager.raw_cluster_cmd("fs", "snapshot", "mirror", "add", self.primary_fs_name, f'/{repo_path}')
+        self.mount_a.run_shell(['mkdir', f'{repo_path}/.snap/snap_a'])
+
+        with safe_while(sleep=60, tries=10, action='wait for snap sync') as proceed:
+            while proceed():
+                try:
+                    self.mount_b.stat(f'{repo_path}/.snap')
+                except:
+                    # remote dir not yet created
+                    return
+                snap_list = self.mount_b.ls(path=f'{repo_path}/.snap')
+                if not 'snap_a' in snap_list:
+                    return
+                source_res = self.mount_a.dir_checksum(path=f'{repo_path}/.snap/snap_a',
+                                                       follow_symlinks=True)
+                log.debug(f'source snapshot checksum {source_res}')
+
+                dest_res = self.mount_b.dir_checksum(path=f'{repo_path}/.snap/snap_a',
+                                                     follow_symlinks=True)
+                log.debug(f'destination snapshot checksum {dest_res}')
+                if not source_res == dest_res:
+                    return
+                return True
