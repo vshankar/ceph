@@ -1,0 +1,13 @@
+overrides:
+  ceph:
+    conf:
+      mgr:
+        debug client: 10
+
+tasks:
+  - cephfs_mirror_thrash:
+      randomize: False
+      max_thrash_delay: 10
+  - cephfs_test_runner:
+      modules:
+        - tasks.cephfs.test_mirroring.TestMirroringHA
