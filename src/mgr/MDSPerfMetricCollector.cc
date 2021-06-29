@@ -33,6 +33,8 @@ void MDSPerfMetricCollector::process_reports(const MetricPayload &payload) {
   // update delayed rank set
   delayed_ranks = metric_report.rank_metrics_delayed;
   dout(20) << ": delayed ranks=[" << delayed_ranks << "]" << dendl;
+
+  last_updated = ceph_clock_now();
 }
 
 int MDSPerfMetricCollector::get_counters(PerfCollector *collector) {
@@ -47,10 +49,16 @@ int MDSPerfMetricCollector::get_counters(PerfCollector *collector) {
 
   get_delayed_ranks(&c->delayed_ranks);
 
+  get_last_updated(c->last_updated);
   return r;
 }
 
 void MDSPerfMetricCollector::get_delayed_ranks(std::set<mds_rank_t> *ranks) {
   ceph_assert(ceph_mutex_is_locked(lock));
   *ranks = delayed_ranks;
+}
+
+void MDSPerfMetricCollector::get_last_updated(utime_t& ts) {
+  ceph_assert(ceph_mutex_is_locked(lock));
+  ts = last_updated;
 }
