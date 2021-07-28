@@ -48,7 +48,7 @@ class CephFSMirror(Task):
                 args, self.config.get('valgrind'))
 
         args.extend([
-            'cephfs-mirror',
+            'cephfs-mirror', '--foreground',
             '--cluster',
             self.cluster_name,
             '--id',
