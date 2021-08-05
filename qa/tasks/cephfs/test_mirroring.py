@@ -1277,6 +1277,9 @@ class TestMirroringHA(CephFSTestCase):
 
     MODULE_NAME = "mirroring"
 
+    NR_DIRECTORIES = 4
+    NR_SNAPSHOTS = 4
+
     def setUp(self):
         super(TestMirroringHA, self).setUp()
         self.primary_fs_name = self.fs.name
@@ -1300,41 +1303,74 @@ class TestMirroringHA(CephFSTestCase):
 
         repo = 'ceph-qa-suite'
         repo_dir = 'ceph_repo'
-        repo_path = f'{repo_dir}/{repo}'
+        repo_path_pfx = f'{repo_dir}/{repo}'
 
-        def clone_repo():
+        def clone_repo(pth):
             self.mount_a.run_shell([
                 'git', 'clone', '--branch', 'giant',
-                f'http://github.com/ceph/{repo}', repo_path])
+                f'http://github.com/ceph/{repo}', pth])
+        def exec_git_cmd(pth, cmd_list):
+            self.mount_a.run_shell(['git', '--git-dir', f'{self.mount_a.mountpoint}/{pth}/.git', *cmd_list])
 
         self.mount_a.run_shell(["mkdir", repo_dir])
-        clone_repo()
+
+        # create # directories
+        for i in range(0, TestMirroringHA.NR_DIRECTORIES):
+            repo_path = f'{repo_path_pfx}_{i}'
+            self.mount_a.run_shell(["mkdir", repo_path])
+            clone_repo(repo_path)
 
         self.mgr_cluster.mon_manager.raw_cluster_cmd("mgr", "module", "enable", TestMirroringHA.MODULE_NAME)
         self.mgr_cluster.mon_manager.raw_cluster_cmd("fs", "snapshot", "mirror", "enable", self.primary_fs_name)
         self.mgr_cluster.mon_manager.raw_cluster_cmd("fs", "snapshot", "mirror", "peer_add", self.primary_fs_name,
                                                      "client.mirror_remote@ceph", self.secondary_fs_name)
 
-        self.mgr_cluster.mon_manager.raw_cluster_cmd("fs", "snapshot", "mirror", "add", self.primary_fs_name, f'/{repo_path}')
-        self.mount_a.run_shell(['mkdir', f'{repo_path}/.snap/snap_a'])
+        for i in range(0, TestMirroringHA.NR_DIRECTORIES):
+            repo_path = f'{repo_path_pfx}_{i}'
+            self.mgr_cluster.mon_manager.raw_cluster_cmd("fs", "snapshot", "mirror", "add", self.primary_fs_name, f'/{repo_path}')
 
-        with safe_while(sleep=60, tries=10, action='wait for snap sync') as proceed:
-            while proceed():
-                try:
-                    self.mount_b.stat(f'{repo_path}/.snap')
-                except:
-                    # remote dir not yet created
-                    return
-                snap_list = self.mount_b.ls(path=f'{repo_path}/.snap')
-                if not 'snap_a' in snap_list:
-                    return
-                source_res = self.mount_a.dir_checksum(path=f'{repo_path}/.snap/snap_a',
-                                                       follow_symlinks=True)
-                log.debug(f'source snapshot checksum {source_res}')
+        # create # snaps in each directory
+        for i in range(0, TestMirroringHA.NR_DIRECTORIES):
+            repo_path = f'{repo_path_pfx}_{i}'
+            for j in range(0, TestMirroringHA.NR_SNAPSHOTS):
+                # create some diff
+                exec_git_cmd(repo_path, ["pull"])
+                num = random.randint(5, 100)
+                log.debug(f'resetting {repo_path} to HEAD~{num}')
+                exec_git_cmd(repo_path, ["reset", "--hard", f'HEAD~{num}'])
+                self.mount_a.run_shell(['mkdir', f'{repo_path}/.snap/snap_{j}'])
 
-                dest_res = self.mount_b.dir_checksum(path=f'{repo_path}/.snap/snap_a',
-                                                     follow_symlinks=True)
-                log.debug(f'destination snapshot checksum {dest_res}')
-                if not source_res == dest_res:
-                    return
-                return True
+        for i in range(0, TestMirroringHA.NR_DIRECTORIES):
+            repo_path = f'{repo_path_pfx}_{i}'
+            with safe_while(sleep=10, tries=30, action=f'checking snapshots for path {repo_path}') as proceed1:
+                while proceed1():
+                    try:
+                        self.mount_b.stat(repo_path)
+                    except CommandFailedError as e:
+                        if e.exitstatus == errno.ENOENT:
+                            continue
+                        raise
+                    for j in range(0, TestMirroringHA.NR_SNAPSHOTS):
+                        snap_name = f'snap_{j}'
+                        with safe_while(sleep=15, tries=20, action=f'checking snaphot {snap_name} in {repo_path}') as proceed2:
+                            while proceed2():
+                                snap_list = self.mount_b.ls(path=f'{repo_path}/.snap')
+                                if not snap_name in snap_list:
+                                    continue
+                                source_res = self.mount_a.dir_checksum(path=f'{repo_path}/.snap/{snap_name}',
+                                                                       follow_symlinks=True)
+                                log.debug(f'source snapshot checksum {source_res}')
+                                dest_res = self.mount_b.dir_checksum(path=f'{repo_path}/.snap/{snap_name}',
+                                                                     follow_symlinks=True)
+                                log.debug(f'destination snapshot checksum {dest_res}')
+                                if source_res == dest_res:
+                                    break
+                                return
+                    break
+
+        for i in range(0, TestMirroringHA.NR_DIRECTORIES):
+            repo_path = f'{repo_path_pfx}_{i}'
+            self.mgr_cluster.mon_manager.raw_cluster_cmd("fs", "snapshot", "mirror", "remove", self.primary_fs_name, f'/{repo_path}')
+        time.sleep(30)
+        self.mgr_cluster.mon_manager.raw_cluster_cmd("fs", "snapshot", "mirror", "disable", self.primary_fs_name)
+        time.sleep(10)
