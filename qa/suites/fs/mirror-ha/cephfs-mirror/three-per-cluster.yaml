@@ -3,7 +3,10 @@ meta:
 tasks:
 - cephfs-mirror:
     client: client.mirror1
+    run_in_foreground: True
 - cephfs-mirror:
     client: client.mirror2
+    run_in_foreground: True
 - cephfs-mirror:
     client: client.mirror3
+    run_in_foreground: True

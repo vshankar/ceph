@@ -48,12 +48,14 @@ class CephFSMirror(Task):
                 args, self.config.get('valgrind'))
 
         args.extend([
-            'cephfs-mirror', '--foreground',
+            'cephfs-mirror',
             '--cluster',
             self.cluster_name,
             '--id',
             self.client_id,
             ])
+        if 'run_in_foreground' in self.config:
+            args.extend(['--foreground'])
 
         self.ctx.daemons.add_daemon(
             self.remote, 'cephfs-mirror', self.client,
