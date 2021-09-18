@@ -4358,6 +4358,9 @@ public:
   void finish(int r) override {
     ceph_assert(r == 0);
 
+    // crash current MDS and the replacing MDS will test the journal
+    ceph_assert(!g_conf()->mds_kill_skip_replaying_inotable);
+
     dn->pop_projected_linkage();
 
     // dirty inode, dn, dir
@@ -6326,6 +6329,9 @@ public:
     ServerLogContext(s, r), dn(d), newi(ni) {}
   void finish(int r) override {
     ceph_assert(r == 0);
+
+    // crash current MDS and the replacing MDS will test the journal
+    ceph_assert(!g_conf()->mds_kill_skip_replaying_inotable);
 
     // link the inode
     dn->pop_projected_linkage();
