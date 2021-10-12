@@ -221,6 +221,7 @@ class FSPolicy:
     def add_dir(self, dir_path):
         with self.lock:
             lookup_info = self.policy.lookup(dir_path)
+            log.debug(f'lookup {dir_path} == {lookup_info}')
             if lookup_info:
                 if lookup_info['purging']:
                     raise MirrorException(-errno.EAGAIN, f'remove in-progress for {dir_path}')
