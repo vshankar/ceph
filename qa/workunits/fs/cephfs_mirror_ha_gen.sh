@@ -1,54 +1,31 @@
 #!/bin/bash -ex
 #
-# cephfs_mirror_ha.sh - test cephfs-mirror daemons in HA mode
+# cephfs_mirror_ha_gen.sh - generate workload to synchronize
 #
 
-PRIMARY_FS='dc'
-BACKUP_FS='dc-backup'
+. $(dirname $0)/cephfs_mirror_helpers.sh
 
-REPO=ceph-qa-suite
-REPO_DIR=ceph_repo
-REPO_PATH_PFX="$REPO_DIR/$REPO"
-
-NR_DIRECTORIES=4
-NR_SNAPSHOTS=4
-MIRROR_SUBDIR='/mirror'
-
-exec_git_cmd()
+cleanup()
 {
-    local arg=("$@")
-    local repo_name=${arg[0]}
-    local cmd=${arg[@]:1}
-    git --git-dir "$repo_name/.git" $cmd
-}
-
-clone_repo()
-{
-    local repo_name=$1
-    git clone --branch giant "http://github.com/ceph/$REPO" $repo_name
-}
-
-setup_repos()
-{
-    mkdir "$REPO_DIR"
-
     for i in `seq 1 $NR_DIRECTORIES`
     do
         local repo_name="${REPO_PATH_PFX}_$i"
-        mkdir $repo_name
-        clone_repo $repo_name
-        #arr=($repo_name "config" "pull.rebase" "true")
-        #exec_git_cmd "${arr[@]}"
+        for j in `seq 1 $NR_SNAPSHOTS`
+        do
+            snap_name=$repo_name/.snap/snap_$j
+            if test -f $snap_name; then
+                rmdir $snap_name
+            fi
+        done
     done
 }
+trap cleanup EXIT
 
 configure_peer()
 {
     ceph mgr module enable mirroring
     ceph fs snapshot mirror enable $PRIMARY_FS
     ceph fs snapshot mirror peer_add $PRIMARY_FS client.mirror_remote@ceph $BACKUP_FS
-
-    ceph fs snapshot mirror show distribution $PRIMARY_FS
 
     for i in `seq 1 $NR_DIRECTORIES`
     do
@@ -59,19 +36,19 @@ configure_peer()
 
 create_snaps()
 {
-    echo "==== $PWD ==="
-    findmnt
     for i in `seq 1 $NR_DIRECTORIES`
     do
         local repo_name="${REPO_PATH_PFX}_$i"
         for j in `seq 1 $NR_SNAPSHOTS`
         do
+            snap_name=$repo_name/.snap/snap_$j
             arr=($repo_name "pull")
             exec_git_cmd "${arr[@]}"
             r=$(( $RANDOM % 100 + 5 ))
             arr=($repo_name "reset" "--hard" "HEAD~$r")
             exec_git_cmd "${arr[@]}"
-            mkdir "$repo_name/.snap/snap_$j"
+            mkdir $snap_name
+            store_hash $snap_name
         done
     done
 }

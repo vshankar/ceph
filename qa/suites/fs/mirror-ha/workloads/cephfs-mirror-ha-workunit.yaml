@@ -23,5 +23,14 @@ tasks:
   - workunit:
       subdir: mirror
       clients:
-        client.1: [fs/cephfs_mirror_ha.sh]
-      timeout: 3h
+        client.1: [fs/cephfs_mirror_ha_gen.sh]
+      timeout: 1h
+  - exec:
+      client.2:
+        - "echo sleeping 600..."
+        - "sleep 600"
+  - workunit:
+      subdir: mirror
+      clients:
+        client.2: [fs/cephfs_mirror_ha_verify.sh]
+      timeout: 1h
