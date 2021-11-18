@@ -522,6 +522,8 @@ static int parse_options(const char *data, struct ceph_mount_info *cmi,
 			}
 			data = "mds_namespace";
 			skip = false;
+		} else if (strcmp(data, "nofallback") == 0) {
+			no_fallback = true;
 		} else if (strcmp(data, "secretfile") == 0) {
 			int ret;
 
@@ -648,8 +650,6 @@ static int parse_arguments(int argc, char *const *const argv,
 				return -EINVAL;
 			}
 			*opts = argv[i];
-		} else if (!strcmp("-f", argv[i])) {
-			no_fallback = true;
                 } else {
 			fprintf(stderr, "Can't understand option: '%s'\n\n", argv[i]);
 			return -EINVAL;
@@ -671,13 +671,12 @@ static void modprobe(void)
 
 static void usage(const char *prog_name)
 {
-	printf("usage: %s [src] [mount-point] [-n] [-v] [-f] [-o ceph-options]\n",
+	printf("usage: %s [src] [mount-point] [-n] [-v] [-o ceph-options]\n",
 		prog_name);
 	printf("options:\n");
 	printf("\t-h: Print this help\n");
 	printf("\t-n: Do not update /etc/mtab\n");
 	printf("\t-v: Verbose\n");
-	printf("\t-f: Do not fall-back to old-style syntax\n");
 	printf("\tceph-options: refer to mount.ceph(8)\n");
 	printf("\n");
 }
