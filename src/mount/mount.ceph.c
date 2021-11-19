@@ -224,7 +224,7 @@ static int parse_new_dev(const char *dev_str, struct ceph_mount_info *cmi,
 	size_t len;
 	char *name;
 	char *name_end;
-	char *fsid;
+	char *dot;
 	char *fs_name;
 
 	name_end = strstr(dev_str, "@");
@@ -256,11 +256,14 @@ static int parse_new_dev(const char *dev_str, struct ceph_mount_info *cmi,
 
 	++name_end;
 	/* check if an fsid is included in the device string */
-	fsid = strstr(name_end, ".");
-	if (fsid) {
-		len = fsid - name_end;
-		/* check if this _looks_ like a UUID -- the actual fsid
-		   verification is done in the kernel */
+	dot = strstr(name_end, ".");
+	if (!dot) {
+		fprintf(stderr, "invalid device string format\n");
+		return -EINVAL;
+	}
+	len = dot - name_end;
+	if (len) {
+		/* check if this _looks_ like a UUID */
 		if (len != CLUSTER_FSID_LEN - 1) {
 			fprintf(stderr, "invalid device string format\n");
 			return -EINVAL;
@@ -269,21 +272,20 @@ static int parse_new_dev(const char *dev_str, struct ceph_mount_info *cmi,
 		cmi->cmi_fsid = strndup(name_end, len);
 		if (!cmi->cmi_fsid)
 			return -ENOMEM;
-		++fsid;
-		name_end = fsid;
 	}
 
-	fs_name = strstr(name_end, "=");
+	++dot;
+	fs_name = strstr(dot, "=");
 	if (!fs_name) {
 		fprintf(stderr, "invalid device string format\n");
 		return -EINVAL;
 	}
-	len = fs_name - name_end;
+	len = fs_name - dot;
 	if (!len) {
 		fprintf(stderr, "missing <fs_name> in device\n");
 		return -EINVAL;
 	}
-	cmi->cmi_fsname = strndup(name_end, len);
+	cmi->cmi_fsname = strndup(dot, len);
 	if (!cmi->cmi_fsname)
 		return -ENOMEM;
 
