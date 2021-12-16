@@ -13,11 +13,11 @@ class MDSPerfMetricCollector
                            MDSPerfMetrics> {
 private:
   std::set<mds_rank_t> delayed_ranks;
-  utime_t last_updated;
+  struct timespec last_updated_mono;
 
   void get_delayed_ranks(std::set<mds_rank_t> *ranks);
 
-  void get_last_updated(utime_t&);
+  void get_last_updated(utime_t *ts);
 public:
   MDSPerfMetricCollector(MetricListener &listener);
 

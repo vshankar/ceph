@@ -1436,7 +1436,7 @@ PyObject *ActivePyModules::get_mds_perf_counters(MetricQueryID query_id)
   f.close_section(); // counters
 
   f.open_array_section("last_updated");
-  f.dump_float("last_updated_ts", collector.last_updated);
+  f.dump_float("last_updated_mono", collector.last_updated_mono);
   f.close_section(); // last_updated
 
   f.close_section(); // metrics

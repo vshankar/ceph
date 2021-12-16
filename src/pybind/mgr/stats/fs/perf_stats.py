@@ -181,7 +181,7 @@ class FSPerfStats(object):
             rank0_gid, state = gid_state
             if (rank0_gid and rank0_gid != self.prev_rank0_gid and state == 'up:active'):
                 #the new rank0 MDS is up:active
-                ua_last_updated = datetime.now()
+                ua_last_updated = time.monotonic()
                 if (self.rqtimer and self.rqtimer.is_alive()):
                     self.rqtimer.cancel()
                 self.rqtimer = Timer(REREGISTER_TIMER_INTERVAL,
@@ -312,7 +312,8 @@ class FSPerfStats(object):
             # what's received from MDS
             incoming_metrics = result['metrics'][1]
 
-            self.mx_last_updated = datetime.fromtimestamp(result['metrics'][2][0])
+            # metrics updated (monotonic) time
+            self.mx_last_updated = result['metrics'][2][0]
 
             # cull missing MDSs and clients
             self.cull_missing_entries(raw_perf_counters, incoming_metrics)
