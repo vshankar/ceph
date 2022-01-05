@@ -4,6 +4,7 @@ overrides:
   ceph:
     conf:
       client:
+        debug client: 20
         debug cephfs_mirror: 20
         log to stderr: false
       # make these predictable
