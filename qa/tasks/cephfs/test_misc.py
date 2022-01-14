@@ -29,6 +29,19 @@ class TestMisc(CephFSTestCase):
         self.mount_a.umount_wait(force=True)
         p.wait()
 
+    def test_fuse_mount_on_already_mounted_path(self):
+        if not isinstance(self.mount_a, FuseMount):
+            self.skipTest("Require FUSE client")
+
+        # Try to mount already mounted path
+        # expecting EBUSY error
+        try:
+            self.mount_a.mount_wait()
+        except CommandFailedError as e:
+            self.assertEqual(e.exitstatus, errno.EBUSY)
+        else:
+            self.fail("Expected EBUSY")
+
     def test_getattr_caps(self):
         """
         Check if MDS recognizes the 'mask' parameter of open request.
