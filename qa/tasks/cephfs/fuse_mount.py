@@ -10,7 +10,7 @@ from teuthology.contextutil import safe_while
 from teuthology.orchestra import run
 from teuthology.exceptions import CommandFailedError
 from tasks.ceph_manager import get_valgrind_args
-from tasks.cephfs.mount import CephFSMount
+from tasks.cephfs.mount import CephFSMount, UMOUNT_TIMEOUT
 
 log = logging.getLogger(__name__)
 
@@ -146,7 +146,7 @@ class FuseMount(CephFSMount):
         try:
             ls_str = self.client_remote.sh("ls " + conn_dir,
                                            stdout=StringIO(),
-                                           timeout=(15*60)).strip()
+                                           timeout=300).strip()
         except CommandFailedError:
             return []
 
@@ -239,7 +239,7 @@ class FuseMount(CephFSMount):
             stdout=StringIO(),
             stderr=StringIO(),
             wait=False,
-            timeout=(15*60)
+            timeout=300
         )
         try:
             proc.wait()
@@ -286,7 +286,7 @@ class FuseMount(CephFSMount):
                 stderr = StringIO()
                 self.client_remote.run(args=['sudo', 'chmod', '1777',
                                              self.hostfs_mntpt],
-                                       timeout=(15*60),
+                                       timeout=300,
                                        stderr=stderr, omit_sudo=False)
                 break
             except run.CommandFailedError:
@@ -299,7 +299,9 @@ class FuseMount(CephFSMount):
                     raise
 
     def _mountpoint_exists(self):
-        return self.client_remote.run(args=["ls", "-d", self.hostfs_mntpt], check_status=False, timeout=(15*60)).exitstatus == 0
+        return self.client_remote.run(args=["ls", "-d", self.hostfs_mntpt],
+                                      check_status=False,
+                                      timeout=300).exitstatus == 0
 
     def umount(self, cleanup=True):
         """
@@ -314,10 +316,9 @@ class FuseMount(CephFSMount):
         try:
             log.info('Running fusermount -u on {name}...'.format(name=self.client_remote.name))
             stderr = StringIO()
-            self.client_remote.run(args=['sudo', 'fusermount', '-u',
-                                         self.hostfs_mntpt],
-                                   stderr=stderr,
-                                   timeout=(30*60), omit_sudo=False)
+            self.client_remote.run(
+                args=['sudo', 'fusermount', '-u', self.hostfs_mntpt],
+                stderr=stderr, timeout=UMOUNT_TIMEOUT, omit_sudo=False)
         except run.CommandFailedError:
             if "mountpoint not found" in stderr.getvalue():
                 # This happens if the mount directory doesn't exist
@@ -331,7 +332,7 @@ class FuseMount(CephFSMount):
                 self.client_remote.run(
                     args=['sudo', run.Raw('PATH=/usr/sbin:$PATH'), 'lsof',
                     run.Raw(';'), 'ps', 'auxf'],
-                    timeout=(60*15), omit_sudo=False)
+                    timeout=UMOUNT_TIMEOUT, omit_sudo=False)
 
                 # abort the fuse mount, killing all hung processes
                 if self._fuse_conn:
@@ -346,9 +347,9 @@ class FuseMount(CephFSMount):
                 stderr = StringIO()
                 # make sure its unmounted
                 try:
-                    self.client_remote.run(args=['sudo', 'umount', '-l', '-f',
-                                                 self.hostfs_mntpt],
-                                           stderr=stderr, timeout=(60*15), omit_sudo=False)
+                    self.client_remote.run(
+                        args=['sudo', 'umount', '-l', '-f', self.hostfs_mntpt],
+                        stderr=stderr, timeout=UMOUNT_TIMEOUT, omit_sudo=False)
                 except CommandFailedError:
                     if self.is_mounted():
                         raise
@@ -361,7 +362,7 @@ class FuseMount(CephFSMount):
         if cleanup:
             self.cleanup()
 
-    def umount_wait(self, force=False, require_clean=False, timeout=900):
+    def umount_wait(self, force=False, require_clean=False):
         """
         :param force: Complete cleanly even if the MDS is offline
         """
@@ -391,7 +392,7 @@ class FuseMount(CephFSMount):
 
         try:
             # Permit a timeout, so that we do not block forever
-            run.wait([self.fuse_daemon], timeout)
+            run.wait([self.fuse_daemon], UMOUNT_TIMEOUT)
 
         except MaxWhileTries:
             log.error("process failed to terminate after unmount. This probably"
@@ -475,7 +476,7 @@ print(_find_admin_socket("{client_name}"))
                     p = self.client_remote.run(args=
                         ['sudo', self._prefix + 'ceph', '--admin-daemon', asok_path] + args,
                         stdout=StringIO(), stderr=StringIO(), wait=False,
-                        timeout=(15*60))
+                        timeout=300)
                     p.wait()
                     break
                 except CommandFailedError:
