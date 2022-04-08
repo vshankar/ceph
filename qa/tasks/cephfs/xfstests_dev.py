@@ -148,6 +148,7 @@ class XFSTestsDev(CephFSTestCase):
             ''').format(self.test_dev, self.test_dirs_mount_path, self.scratch_dev,
                         self.scratch_dirs_mount_path, self.get_admin_key())
 
+        logger.info(f'local.config={xfstests_config_contents}')
         self.mount_a.client_remote.write_file(join(self.repo_path, 'local.config'),
                                               xfstests_config_contents, sudo=True)
 
