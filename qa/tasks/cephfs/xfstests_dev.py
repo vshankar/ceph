@@ -142,6 +142,7 @@ class XFSTestsDev(CephFSTestCase):
             export FSTYP=ceph
             export TEST_DEV={}
             export TEST_DIR={}
+            export MOUNT_PROG="/bin/mount -v"
             #export SCRATCH_DEV={}
             #export SCRATCH_MNT={}
             export TEST_FS_MOUNT_OPTS="-o name=admin,secret={}"
