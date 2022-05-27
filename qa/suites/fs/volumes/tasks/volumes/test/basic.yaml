@@ -2,6 +2,4 @@ tasks:
   - cephfs_test_runner:
       fail_on_skip: false
       modules:
-        - tasks.cephfs.test_volumes.TestVolumes
-        - tasks.cephfs.test_volumes.TestSubvolumeGroups
-        - tasks.cephfs.test_volumes.TestSubvolumes
+        - tasks.cephfs.test_volumes.TestSubvolumeGroups.test_subvolume_group_quota_mds_path_restriction_to_group_path
