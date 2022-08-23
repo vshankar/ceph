@@ -2607,6 +2607,7 @@ Then run the following:
             spec=spec,
             hosts=self.cache.get_schedulable_hosts(),
             unreachable_hosts=self.cache.get_unreachable_hosts(),
+            draining_hosts=self.cache.get_draining_hosts(),
             networks=self.cache.networks,
             daemons=self.cache.get_daemons_by_service(spec.service_name()),
             allow_colo=svc.allow_colo(),
@@ -2689,6 +2690,7 @@ Then run the following:
             spec=spec,
             hosts=self.inventory.all_specs(),  # All hosts, even those without daemon refresh
             unreachable_hosts=self.cache.get_unreachable_hosts(),
+            draining_hosts=self.cache.get_draining_hosts(),
             networks=self.cache.networks,
             daemons=self.cache.get_daemons_by_service(spec.service_name()),
             allow_colo=self.cephadm_services[spec.service_type].allow_colo(),
@@ -2921,9 +2923,9 @@ Then run the following:
 
         # trigger the serve loop to initiate the removal
         self._kick_serve_loop()
-        warning_zap = "" if not zap else ("\nVG/LV for the OSDs won't be zapped (--zap wasn't passed).\n"
-                                          "Run the `ceph-volume lvm zap` command with `--destroy`"
-                                          " against the VG/LV if you want them to be destroyed.")
+        warning_zap = "" if zap else ("\nVG/LV for the OSDs won't be zapped (--zap wasn't passed).\n"
+                                      "Run the `ceph-volume lvm zap` command with `--destroy`"
+                                      " against the VG/LV if you want them to be destroyed.")
         return f"Scheduled OSD(s) for removal.{warning_zap}"
 
     @handle_orch_error

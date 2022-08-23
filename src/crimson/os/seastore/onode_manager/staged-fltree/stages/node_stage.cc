@@ -107,7 +107,7 @@ memory_range_t NODE_T::insert_prefix_at(
     const char* p_insert = node.p_start() +
                            node.fields().get_item_end_offset(index, mut.get_length());
     const char* p_insert_front = p_insert - size_right;
-    FieldType::template insert_at<KT>(mut, key, node.fields(), index, size_right);
+    FieldType::insert_at(mut, key, node.fields(), index, size_right);
     mut.shift_absolute(p_left_bound,
                        p_insert - p_left_bound,
                        -(int)size_right);
@@ -372,9 +372,9 @@ APPEND_T::open_nxt(const full_key_t<KT>& key)
 {
   if constexpr (FIELD_TYPE == field_type_t::N0 ||
                 FIELD_TYPE == field_type_t::N1) {
-    FieldType::template append_key<KT>(*p_mut, key, p_append_left);
+    FieldType::append_key(*p_mut, key, p_append_left);
   } else if constexpr (FIELD_TYPE == field_type_t::N2) {
-    FieldType::template append_key<KT>(*p_mut, key, p_append_right);
+    FieldType::append_key(*p_mut, key, p_append_right);
   } else {
     ceph_abort("impossible path");
   }

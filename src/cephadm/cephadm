@@ -2647,10 +2647,8 @@ def get_daemon_args(ctx, fsid, daemon_type, daemon_id):
                 r += ['--cluster.peer={}'.format(peer)]
             # some alertmanager, by default, look elsewhere for a config
             r += ['--config.file=/etc/alertmanager/alertmanager.yml']
-        if daemon_type == 'loki':
-            r += ['--config.file=/etc/loki/loki.yml']
         if daemon_type == 'promtail':
-            r += ['--config.file=/etc/promtail/promtail.yml']
+            r += ['--config.expand-env']
         if daemon_type == 'node-exporter':
             r += ['--path.procfs=/host/proc',
                   '--path.sysfs=/host/sys',
@@ -4885,7 +4883,7 @@ def get_public_net_from_cfg(ctx: CephadmContext) -> Optional[str]:
         return None
 
     # Ensure all public CIDR networks are valid
-    public_network = cp.get('global', 'public_network')
+    public_network = cp.get('global', 'public_network').strip('"').strip("'")
     rc, _, err_msg = check_subnet(public_network)
     if rc:
         raise Error(f'Invalid public_network {public_network} parameter: {err_msg}')
@@ -4982,7 +4980,7 @@ def prepare_cluster_network(ctx: CephadmContext) -> Tuple[str, bool]:
     cp = read_config(ctx.config)
     cluster_network = ctx.cluster_network
     if cluster_network is None and cp.has_option('global', 'cluster_network'):
-        cluster_network = cp.get('global', 'cluster_network')
+        cluster_network = cp.get('global', 'cluster_network').strip('"').strip("'")
 
     if cluster_network:
         cluser_nets = set([x.strip() for x in cluster_network.split(',')])
@@ -5260,7 +5258,7 @@ def prepare_ssh(
             logger.info('Deploying %s service with default placement...' % t)
             cli(['orch', 'apply', t])
 
-    if not ctx.skip_centralized_logging:
+    if ctx.with_centralized_logging:
         for t in ['loki', 'promtail']:
             logger.info('Deploying %s service with default placement...' % t)
             cli(['orch', 'apply', t])
@@ -7157,7 +7155,7 @@ def _zap_osds(ctx: CephadmContext) -> None:
         raise Error(f'Invalid JSON in ceph-volume inventory: {e}')
 
     for i in ls:
-        matches = [lv.get('cluster_fsid') == ctx.fsid for lv in i.get('lvs', [])]
+        matches = [lv.get('cluster_fsid') == ctx.fsid and i.get('ceph_device') for lv in i.get('lvs', [])]
         if any(matches) and all(matches):
             _zap(ctx, i.get('path'))
         elif any(matches):
@@ -7764,6 +7762,7 @@ class YumDnf(Packager):
         'scientific': ('centos', 'el'),
         'rocky': ('centos', 'el'),
         'almalinux': ('centos', 'el'),
+        'ol': ('centos', 'el'),
         'fedora': ('fedora', 'fc'),
         'mariner': ('mariner', 'cm'),
     }
@@ -9461,9 +9460,9 @@ def _get_parser():
         action='store_true',
         help='Do not automatically provision monitoring stack (prometheus, grafana, alertmanager, node-exporter)')
     parser_bootstrap.add_argument(
-        '--skip-centralized-logging',
+        '--with-centralized-logging',
         action='store_true',
-        help='Do not automatically provision centralized logging (promtail, loki)')
+        help='Automatically provision centralized logging (promtail, loki)')
     parser_bootstrap.add_argument(
         '--apply-spec',
         help='Apply cluster spec after bootstrap (copy ssh key, add hosts and apply services)')

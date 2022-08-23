@@ -167,9 +167,9 @@ rgw_raw_obj rgw_obj_select::get_raw_obj(rgw::sal::RadosStore* store) const
   return raw_obj;
 }
 
-void RGWObjVersionTracker::prepare_op_for_read(ObjectReadOperation *op)
+void RGWObjVersionTracker::prepare_op_for_read(ObjectReadOperation* op)
 {
-  obj_version *check_objv = version_for_check();
+  obj_version* check_objv = version_for_check();
 
   if (check_objv) {
     cls_version_check(*op, *check_objv, VER_COND_EQ);
@@ -180,8 +180,8 @@ void RGWObjVersionTracker::prepare_op_for_read(ObjectReadOperation *op)
 
 void RGWObjVersionTracker::prepare_op_for_write(ObjectWriteOperation *op)
 {
-  obj_version *check_objv = version_for_check();
-  obj_version *modify_version = version_for_write();
+  obj_version* check_objv = version_for_check();
+  obj_version* modify_version = version_for_write();
 
   if (check_objv) {
     cls_version_check(*op, *check_objv, VER_COND_EQ);
@@ -263,10 +263,10 @@ void RGWObjectCtx::invalidate(const rgw_obj& obj) {
   }
 }
 
-void RGWObjVersionTracker::generate_new_write_ver(CephContext *cct)
+void RGWObjVersionTracker::generate_new_write_ver(CephContext* cct)
 {
+  static constexpr auto TAG_LEN = 24;
   write_version.ver = 1;
-#define TAG_LEN 24
 
   write_version.tag.clear();
   append_rand_alpha(cct, write_version.tag, write_version.tag, TAG_LEN);
@@ -9211,6 +9211,11 @@ int RGWRados::check_disk_state(const DoutPrefixProvider *dpp,
   std::string loc;
 
   std::unique_ptr<rgw::sal::Object> obj = bucket->get_object(list_state.key);
+  MultipartMetaFilter multipart_meta_filter;
+  string temp_key;
+  if (multipart_meta_filter.filter(list_state.key.name, temp_key)) {
+    obj->set_in_extra_data(true);
+  }
 
   string oid;
   get_obj_bucket_and_oid_loc(obj->get_obj(), oid, loc);
@@ -9252,6 +9257,7 @@ int RGWRados::check_disk_state(const DoutPrefixProvider *dpp,
   string content_type;
   string storage_class;
   ACLOwner owner;
+  bool appendable = false;
 
   object.meta.size = astate->size;
   object.meta.accounted_size = astate->accounted_size;
@@ -9275,6 +9281,10 @@ int RGWRados::check_disk_state(const DoutPrefixProvider *dpp,
     if (r < 0) {
       ldpp_dout(dpp, 0) << "WARNING: could not decode policy for object: " << obj << dendl;
     }
+  }
+  iter = astate->attrset.find(RGW_ATTR_APPEND_PART_NUM);
+  if (iter != astate->attrset.end()) {
+    appendable = true;
   }
 
   if (manifest) {
@@ -9300,6 +9310,7 @@ int RGWRados::check_disk_state(const DoutPrefixProvider *dpp,
   object.meta.storage_class = storage_class;
   object.meta.owner = owner.get_id().to_str();
   object.meta.owner_display_name = owner.get_display_name();
+  object.meta.appendable = appendable;
 
   // encode suggested updates
 
@@ -9308,6 +9319,7 @@ int RGWRados::check_disk_state(const DoutPrefixProvider *dpp,
   list_state.meta.mtime = object.meta.mtime;
   list_state.meta.category = main_category;
   list_state.meta.etag = etag;
+  list_state.meta.appendable = appendable;
   list_state.meta.content_type = content_type;
   list_state.meta.storage_class = storage_class;
 

@@ -378,8 +378,8 @@ OpsExecuter::watch_ierrorator::future<> OpsExecuter::do_op_list_watchers(
     assert(key.second.is_client());
     response.entries.emplace_back(watch_item_t{
       key.second, info.cookie, info.timeout_seconds, info.addr});
-    response.encode(osd_op.outdata, get_message().get_features());
   }
+  response.encode(osd_op.outdata, get_message().get_features());
   return watch_ierrorator::now();
 }
 
@@ -591,6 +591,7 @@ OpsExecuter::do_execute_op(OSDOp& osd_op)
     // TODO: there was an effort to kill TMAP in ceph-osd. According to
     // @dzafman this isn't possible yet. Maybe it could be accomplished
     // before crimson's readiness and we'd luckily don't need to carry.
+    logger().info("crimson explicitly does not support CEPH_OSD_OP_TMAPUP");
     return dont_do_legacy_op();
 
   // OMAP
