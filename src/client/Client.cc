@@ -5770,7 +5770,7 @@ int Client::xattr_permission(Inode *in, const char *name, unsigned want,
     goto out;
 
   r = 0;
-  if (strncmp(name, "system.", 7) == 0) {
+  if (in->snapid != CEPH_SNAPDIR && strncmp(name, "system.", 7) == 0) {
     if ((want & MAY_WRITE) && (perms.uid() != 0 && perms.uid() != in->uid))
       r = -CEPHFS_EPERM;
   } else {
@@ -11926,6 +11926,12 @@ Inode *Client::open_snapdir(Inode *diri)
 
     in->dirfragtree.clear();
     in->snapdir_parent = diri;
+    // copy posix acls to snapshotted inode
+    for (auto &[xattr_key, xattr_value] : diri->xattrs) {
+      if (xattr_key.rfind("system.", 0) == 0) {
+        in->xattrs[xattr_key] = xattr_value;
+      }
+    }
     diri->flags |= I_SNAPDIR_OPEN;
     inode_map[vino] = in;
     if (use_faked_inos())

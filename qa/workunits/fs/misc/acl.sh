@@ -47,4 +47,19 @@ expect_failure getfattr -n system.posix_acl_default .
 rmdir d1
 cd ..
 rmdir testdir
+
+# test posix acls for snapdir
+# set posix acl on a directory that allows
+# "rwx" members of group class.
+useradd --group nobody fsuser
+
+mkdir testdir
+chmod 0750 testdir
+pwd=`pwd`
+
+setfacl -m g:nobody:rwx testdir
+
+su fsuser
+ls $pwd/.snap
+
 echo OK
