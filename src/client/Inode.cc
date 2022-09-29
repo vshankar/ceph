@@ -55,8 +55,11 @@ ostream& operator<<(ostream &out, const Inode &in)
       << " nlink=" << in.nlink
       << " btime=" << in.btime
       << " mtime=" << in.mtime
-      << " ctime=" << in.ctime
-      << " caps=" << ccap_string(in.caps_issued());
+      << " ctime=" << in.ctime;
+  if (!in.snap_mtime.is_zero()) {
+    out << " snap_mtime=" << in.snap_mtime;
+  }
+  out << " caps=" << ccap_string(in.caps_issued());
   if (!in.caps.empty()) {
     out << "(";
     bool first = true;

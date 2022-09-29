@@ -1054,6 +1054,7 @@ Inode * Client::add_update_inode(InodeStat *st, utime_t from,
     in->gid = st->gid;
     in->btime = st->btime;
     in->snap_btime = st->snap_btime;
+    in->snap_mtime = st->snap_mtime;
     in->snap_metadata = st->snap_metadata;
     in->fscrypt_auth = st->fscrypt_auth;
     need_snapdir_attr_refresh = true;
@@ -11939,8 +11940,11 @@ void Client::refresh_snapdir_attrs(Inode *in, Inode *diri) {
   in->uid = diri->uid;
   in->gid = diri->gid;
   in->nlink = 1;
-  in->mtime = diri->mtime;
-  in->ctime = diri->ctime;
+  in->mtime = diri->snap_mtime;
+  if (in->mtime.is_zero()) {
+    in->mtime = diri->mtime;
+  }
+  in->ctime = in->mtime;
   in->btime = diri->btime;
   in->atime = diri->atime;
   in->size = diri->size;

@@ -159,6 +159,7 @@ struct Inode : RefCountedObject {
   version_t version = 0;           // auth only
   version_t xattr_version = 0;
   utime_t   snap_btime;        // snapshot creation (birth) time
+  utime_t   snap_mtime;        // time when snaps changed (under .snap)
   std::map<std::string, std::string> snap_metadata;
 
   // inline data
