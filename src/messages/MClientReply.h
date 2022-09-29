@@ -121,7 +121,7 @@ struct InodeStat {
   version_t xattr_version = 0;
   ceph_mds_reply_cap cap;
   file_layout_t layout;
-  utime_t ctime, btime, mtime, atime, snap_btime;
+  utime_t ctime, btime, mtime, atime, snap_btime, snap_mtime;
   uint32_t time_warp_seq = 0;
   uint64_t size = 0, max_size = 0;
   uint64_t change_attr = 0;
@@ -158,7 +158,7 @@ struct InodeStat {
   void decode(ceph::buffer::list::const_iterator &p, const uint64_t features) {
     using ceph::decode;
     if (features == (uint64_t)-1) {
-      DECODE_START(7, p);
+      DECODE_START(8, p);
       decode(vino.ino, p);
       decode(vino.snapid, p);
       decode(rdev, p);
@@ -220,6 +220,9 @@ struct InodeStat {
       if (struct_v >= 7) {
         decode(fscrypt_auth, p);
         decode(fscrypt_file, p);
+      }
+      if (struct_v >= 8) {
+        decode(snap_mtime, p);
       }
       DECODE_FINISH(p);
     }

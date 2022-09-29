@@ -506,6 +506,8 @@ struct inode_t {
 
   // change attribute
   uint64_t   change_attr = 0;
+  // modification time of change in snaps
+  utime_t    snap_mtime;
 
   client_range_map client_ranges;  // client(s) can write to these ranges
 
@@ -548,7 +550,7 @@ private:
 template<template<typename> class Allocator>
 void inode_t<Allocator>::encode(ceph::buffer::list &bl, uint64_t features) const
 {
-  ENCODE_START(19, 6, bl);
+  ENCODE_START(20, 6, bl);
 
   encode(ino, bl);
   encode(rdev, bl);
@@ -607,13 +609,15 @@ void inode_t<Allocator>::encode(ceph::buffer::list &bl, uint64_t features) const
   encode(fscrypt_auth, bl);
   encode(fscrypt_file, bl);
   encode(fscrypt_last_block, bl);
+
+  encode(snap_mtime, bl);
   ENCODE_FINISH(bl);
 }
 
 template<template<typename> class Allocator>
 void inode_t<Allocator>::decode(ceph::buffer::list::const_iterator &p)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(19, 6, 6, p);
+  DECODE_START_LEGACY_COMPAT_LEN(20, 6, 6, p);
 
   decode(ino, p);
   decode(rdev, p);
@@ -724,6 +728,10 @@ void inode_t<Allocator>::decode(ceph::buffer::list::const_iterator &p)
   if (struct_v >= 19) {
     decode(fscrypt_last_block, p);
   }
+
+  if (struct_v >= 20) {
+    decode(snap_mtime, p);
+  }
   DECODE_FINISH(p);
 }
 
@@ -760,6 +768,7 @@ void inode_t<Allocator>::dump(ceph::Formatter *f) const
   f->dump_stream("atime") << atime;
   f->dump_unsigned("time_warp_seq", time_warp_seq);
   f->dump_unsigned("change_attr", change_attr);
+  f->dump_stream("snap_mtime") << snap_mtime;
   f->dump_int("export_pin", export_pin);
   f->dump_int("export_ephemeral_random_pin", export_ephemeral_random_pin);
   f->dump_bool("export_ephemeral_distributed_pin", export_ephemeral_distributed_pin);

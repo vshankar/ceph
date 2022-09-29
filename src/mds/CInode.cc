@@ -3802,6 +3802,19 @@ int CInode::encode_inodestat(bufferlist& bl, Session *session,
 	   << " ctime " << any_i->ctime
 	   << " valid=" << valid << dendl;
 
+  utime_t snap_mtime = any_i->snap_mtime;
+  if (snap_mtime.is_zero() && snapid == CEPH_NOSNAP && realm) {
+    map<snapid_t,const SnapInfo*> infomap;
+    realm->get_snap_info(infomap, get_oldest_snap());
+    if (infomap.size()) {
+      snap_mtime = infomap.rbegin()->second->stamp;
+    }
+  }
+
+  if (!snap_mtime.is_zero()) {
+    dout(20) << __func__ << ": including snap_mtime=" << snap_mtime << dendl;
+  }
+
   // file
   const mempool_inode *file_i = pfile ? pi:oi;
   file_layout_t layout;
@@ -4021,7 +4034,7 @@ int CInode::encode_inodestat(bufferlist& bl, Session *session,
    * note: encoding matches MClientReply::InodeStat
    */
   if (session->info.has_feature(CEPHFS_FEATURE_REPLY_ENCODING)) {
-    ENCODE_START(7, 1, bl);
+    ENCODE_START(8, 1, bl);
     encode(oi->ino, bl);
     encode(snapid, bl);
     encode(oi->rdev, bl);
@@ -4069,6 +4082,7 @@ int CInode::encode_inodestat(bufferlist& bl, Session *session,
     encode(!file_i->fscrypt_auth.empty(), bl);
     encode(file_i->fscrypt_auth, bl);
     encode(file_i->fscrypt_file, bl);
+    encode(any_i->snap_mtime, bl);
     ENCODE_FINISH(bl);
   }
   else {
