@@ -2,7 +2,7 @@
 
 set -e
 
-git clone git://git.ceph.com/xfstests.git
+git clone https://git.ceph.com/xfstests.git
 cd xfstests
 git checkout 12973fc04fd10d4af086901e10ffa8e48866b735
 make -j4
