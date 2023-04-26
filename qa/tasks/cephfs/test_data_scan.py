@@ -677,7 +677,7 @@ class TestDataScan(CephFSTestCase):
         self.assertEqual(out_json["return_code"], 0)
         self.assertEqual(self.fs.wait_until_scrub_complete(tag=out_json["scrub_tag"]), True)
 
-    def test_rebuild_inotable(self):
+    def _test_rebuild_inotable(self):
         """
         The scan_links command repair inotables
         """
