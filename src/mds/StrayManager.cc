@@ -671,7 +671,7 @@ void StrayManager::_eval_stray_remote(CDentry *stray_dn, CDentry *remote_dn)
       }
 
     } else if (stray_dn->is_auth()) {
-      migrate_stray(stray_dn, remote_dn->authority().first);
+      migrate_stray(stray_dn, remote_dn->authority().first, remote_dn);
     } else {
       dout(20) << __func__ << ": not reintegrating" << dendl;
     }
@@ -687,20 +687,28 @@ void StrayManager::reintegrate_stray(CDentry *straydn, CDentry *rdn)
   dout(10) << __func__ << " " << *straydn << " to " << *rdn << dendl;
 
   logger->inc(l_mdc_strays_reintegrated);
-  
+
   // rename it to remote linkage .
   filepath src(straydn->get_name(), straydn->get_dir()->ino());
   filepath dst(rdn->get_name(), rdn->get_dir()->ino());
 
+  ceph_tid_t tid = mds->issue_tid();
+
   auto req = make_message<MClientRequest>(CEPH_MDS_OP_RENAME);
   req->set_filepath(dst);
   req->set_filepath2(src);
-  req->set_tid(mds->issue_tid());
+  req->set_tid(tid);
+
+  rdn->state_set(CDentry::STATE_REINTEGRATING);
+  mds->internal_client_requests.emplace(std::piecewise_construct,
+                                        std::make_tuple(tid),
+                                        std::make_tuple(CEPH_MDS_OP_RENAME,
+                                                        rdn, tid));
 
   mds->send_message_mds(req, rdn->authority().first);
 }
- 
-void StrayManager::migrate_stray(CDentry *dn, mds_rank_t to)
+
+void StrayManager::migrate_stray(CDentry *dn, mds_rank_t to, CDentry *rdn)
 {
   dout(10) << __func__ << " " << *dn << " to mds." << to << dendl;
 
@@ -713,10 +721,20 @@ void StrayManager::migrate_stray(CDentry *dn, mds_rank_t to)
   filepath src(dn->get_name(), dirino);
   filepath dst(dn->get_name(), MDS_INO_STRAY(to, MDS_INO_STRAY_INDEX(dirino)));
 
+  ceph_tid_t tid = mds->issue_tid();
+
   auto req = make_message<MClientRequest>(CEPH_MDS_OP_RENAME);
   req->set_filepath(dst);
   req->set_filepath2(src);
-  req->set_tid(mds->issue_tid());
+  req->set_tid(tid);
+
+  if (rdn) {
+    rdn->state_set(CDentry::STATE_REINTEGRATING);
+    mds->internal_client_requests.emplace(std::piecewise_construct,
+                                          std::make_tuple(tid),
+                                          std::make_tuple(CEPH_MDS_OP_RENAME,
+                                                          rdn, tid));
+  }
 
   mds->send_message_mds(req, to);
 }
