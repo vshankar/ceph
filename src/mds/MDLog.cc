@@ -58,6 +58,7 @@ MDLog::MDLog(MDSRank* m)
   max_events = g_conf().get_val<int64_t>("mds_log_max_events");
   skip_corrupt_events = g_conf().get_val<bool>("mds_log_skip_corrupt_events");
   skip_unbounded_events = g_conf().get_val<bool>("mds_log_skip_unbounded_events");
+  upkeep_thread = std::thread(&MDLog::log_trim_upkeep, this);
 }
 
 MDLog::~MDLog()
@@ -554,6 +555,15 @@ void MDLog::shutdown()
     }
   }
 
+  mds->mds_lock.unlock();
+  {
+    std::scoped_lock lock(upkeep_mutex);
+    upkeep_log_trim_shutdown = true;
+    upkeep_cvar.notify_one();
+  }
+  mds->mds_lock.lock();
+  upkeep_thread.join();
+
   // Replay thread can be stuck inside e.g. Journaler::wait_for_readable,
   // so we need to shutdown the journaler first.
   if (journaler) {
@@ -602,6 +612,23 @@ void MDLog::try_to_commit_open_file_table(uint64_t last_seq)
                                          last_seq, CEPH_MSG_PRIO_HIGH);
     submit_mutex.lock();
   }
+}
+
+void MDLog::log_trim_upkeep(void) {
+  dout(10) << dendl;
+  std::unique_lock lock(upkeep_mutex);
+  while (!upkeep_log_trim_shutdown.load()) {
+    lock.unlock();
+    {
+      std::scoped_lock mds_lock(mds->mds_lock);
+      if (mds->is_active() || mds->is_stopping()) {
+	trim();
+      }
+    }
+    lock.lock();
+    upkeep_cvar.wait_for(lock, g_conf().get_val<std::chrono::seconds>("mds_log_trim_upkeep_interval"));
+  }
+  dout(10) << __func__ << ": finished" << dendl;
 }
 
 void MDLog::trim(int m)

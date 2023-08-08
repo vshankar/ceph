@@ -1605,3 +1605,13 @@ options:
   - mds_log_max_segments
   flags:
   - runtime
+- name: mds_log_trim_upkeep_interval
+  type: secs
+  level: advanced
+  desc: MDS log trimming interval
+  long_desc: Interval in seconds to trim MDS logs.
+  default: 1
+  services:
+  - mds
+  flags:
+  - runtime
