@@ -3865,6 +3865,7 @@ const char** MDSRankDispatcher::get_tracked_conf_keys() const
     "mds_symlink_recovery",
     "mds_log_trim_threshold",
     "mds_log_trim_decay_rate",
+    "mds_session_metadata_threshold",
     NULL
   };
   return KEYS;
