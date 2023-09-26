@@ -99,6 +99,10 @@ CephFS: Disallow delegating preallocated inode ranges to clients. Config
   by disabling async recovery by setting osd_async_recovery_min_cost to a very
   large value on all OSDs until the upgrade is complete:
   ``ceph config set osd osd_async_recovery_min_cost 1099511627776``
+* CephFS: MDS log trimming is now driven by a separate thread which tries to
+  trim the log every second (`mds_log_trim_upkeep_interval` config). Also,
+  a couple of configs govern how much time the MDS spends in trimming its
+  logs. These configs are `mds_log_trim_threshold` and `mds_log_trim_decay_rate`.
 
 >=18.0.0
 
