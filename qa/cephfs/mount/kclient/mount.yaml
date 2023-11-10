@@ -12,5 +12,11 @@ teuthology:
   - local function syntax_version()
       return yaml.overrides.kclient.syntax
     end
+  - local function get_os_type()
+      return yaml.os_type
+    end
+  - local function get_os_version()
+      return yaml.os_version
+    end
 tasks:
 - kclient:

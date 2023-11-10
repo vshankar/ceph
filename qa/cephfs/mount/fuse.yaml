@@ -12,5 +12,11 @@ teuthology:
   - local function syntax_version()
       return ''
     end
+  - local function get_os_type()
+      return ''
+    end
+  - local function get_os_version()
+      return ''
+    end
 tasks:
   - ceph-fuse:

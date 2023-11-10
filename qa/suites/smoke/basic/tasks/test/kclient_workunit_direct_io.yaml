@@ -8,7 +8,12 @@ tasks:
     log-ignorelist:
       - \(POOL_APP_NOT_ENABLED\)
 - kclient:
+
 - workunit:
     clients:
       all:
         - direct_io
+
+teuthology:
+  postmerge:
+    - if get_os_type() == 'ubuntu' and get_os_version() == '20.04' then reject() end
