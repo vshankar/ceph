@@ -4851,6 +4851,11 @@ void Server::handle_client_readdir(MDRequestRef& mdr)
 
   dout(10) << " frag " << fg << " offset '" << offset_str << "'"
 	   << " offset_hash " << offset_hash << " flags " << req_flags << dendl;
+  dout(10) << __func__ << ": dirfragtree=" << diri->dirfragtree
+	   << ", diri->dirfragtree[fg.value()]=" << diri->dirfragtree[fg.value()]
+	   << ", fg.value()=" << fg.value()
+	   << " fg.contains((unsigned)offset_hash)=" << fg.contains((unsigned)offset_hash)
+	   << dendl;
 
   // does the frag exist?
   if (diri->dirfragtree[fg.value()] != fg) {
