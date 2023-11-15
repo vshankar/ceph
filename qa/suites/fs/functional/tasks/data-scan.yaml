@@ -15,4 +15,4 @@ overrides:
 tasks:
   - cephfs_test_runner:
       modules:
-        - tasks.cephfs.test_data_scan
+        - tasks.cephfs.test_data_scan.TestDataScan.test_fragmented_injection
