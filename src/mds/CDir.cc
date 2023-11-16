@@ -3803,6 +3803,11 @@ bool CDir::should_merge() const
       return false;
   }
 
+  dout(10) << __func__ << "get_frag_size()=" << (int)get_frag_size()
+	   << ", get_num_snap_items()=" << (int)get_num_snap_items()
+	   << ", mds_bal_merge_size=" << g_conf()->mds_bal_merge_size
+	   << dendl;
+
   return ((int)get_frag_size() + (int)get_num_snap_items()) < g_conf()->mds_bal_merge_size;
 }
 
