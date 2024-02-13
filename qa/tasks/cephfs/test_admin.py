@@ -16,6 +16,51 @@ from tasks.cephfs.caps_helper import (CapTester, gen_mon_cap_str,
 
 log = logging.getLogger(__name__)
 
+class TestLabeledPerfCounters(CephFSTestCase):
+    CLIENTS_REQUIRED = 2
+    MDSS_REQUIRED = 1
+
+    def test_per_client_labeled_perf_counters(self):
+        """
+        That the per-client labelled perf counters depict the clients
+        performaing IO.
+        """
+        # test we have _at least_ two clients
+        dump = self.fs.rank_tell(["counter", "dump"])
+
+        fs_suffix = dump["mds_client_metrics"][0]["labels"]["fs_name"]
+        self.assertGreaterEqual(dump["mds_client_metrics"][0]["counters"]["num_clients"], 0)
+
+        per_client_metrics_key = f'mds_client_metrics-{fs_suffix}'
+        mount_a_id = f'client.{self.mount_a.get_global_id()})'
+        mount_b_id = f'client.{self.mount_b.get_global_id()})'
+
+        clients = [c["labels"]["client"] for c in dump[per_client_metrics_key]]
+        self.assertIn(mount_a_id, clients)
+        self.assertIn(mount_b_id, clients)
+
+        counters_dump_a = [c["counters"] for \
+                           c in dump[per_client_metrics_key] if c["labels"]["client"] == mount_a_id][0]
+        counters_dump_b = [c["counters"] for \
+                           c in dump[per_client_metrics_key] if c["labels"]["client"] == mount_b_id][0]
+
+        # write workload
+        self.mount_a.create_n_files("test_dir/test_file", 1000, sync=True)
+        with safe_while(sleep=1, tries=30, action=f'wait for counters - {mount_a_id}') as proceed:
+            while proceed():
+                if counters_dump_a["total_write_ops"] > 0 and counters_dump_a["total_write_size"] > 0:
+                    return True
+
+        # read from the other client
+        for i in range(100):
+            self.mount_b.open_background(basename=f'test_dir/test_file_{i}', write=False)
+        with safe_while(sleep=1, tries=30, action=f'wait for counters - {mount_a_id}') as proceed:
+            while proceed():
+                if counters_dump_b["total_read_ops"] > 0 and counters_dump_b["total_read_size"] > 0:
+                    return True
+
+        self.fs.teardown()
+
 class TestAdminCommands(CephFSTestCase):
     """
     Tests for administration command.
