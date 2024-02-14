@@ -21,6 +21,10 @@ class TestMirroring(CephFSTestCase):
 
     MODULE_NAME = "mirroring"
 
+    PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR = "cephfs_mirror"
+    PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS = "cephfs_mirror_mirrored_filesystems"
+    PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_PEER = "cephfs_mirror_peers"
+
     def setUp(self):
         super(TestMirroring, self).setUp()
         self.primary_fs_name = self.fs.name
@@ -40,6 +44,9 @@ class TestMirroring(CephFSTestCase):
         self.run_ceph_cmd("mgr", "module", "disable", TestMirroring.MODULE_NAME)
 
     def enable_mirroring(self, fs_name, fs_id):
+        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+        vbefore = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR][0]
+
         self.run_ceph_cmd("fs", "snapshot", "mirror", "enable", fs_name)
         time.sleep(10)
         # verify via asok
@@ -48,7 +55,19 @@ class TestMirroring(CephFSTestCase):
         self.assertTrue(res['peers'] == {})
         self.assertTrue(res['snap_dirs']['dir_count'] == 0)
 
+        # verify labelled perf counter
+        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+        self.assertEqual(res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]["labels"]["filesystem"],
+                         fs_name)
+        vafter = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR][0]
+
+        self.assertGreater(vafter["counters"]["mirrored_filesystems"],
+                           vbefore["counters"]["mirrored_filesystems"])
+
     def disable_mirroring(self, fs_name, fs_id):
+        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+        vbefore = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR][0]
+
         self.run_ceph_cmd("fs", "snapshot", "mirror", "disable", fs_name)
         time.sleep(10)
         # verify via asok
@@ -59,6 +78,13 @@ class TestMirroring(CephFSTestCase):
             pass
         else:
             raise RuntimeError('expected admin socket to be unavailable')
+
+        # verify labelled perf counter
+        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+        vafter = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR][0]
+
+        self.assertLess(vafter["counters"]["mirrored_filesystems"],
+                        vbefore["counters"]["mirrored_filesystems"])
 
     def verify_peer_added(self, fs_name, fs_id, peer_spec, remote_fs_name=None):
         # verify via asok
@@ -75,6 +101,9 @@ class TestMirroring(CephFSTestCase):
             self.assertTrue(self.fs_name == res['peers'][peer_uuid]['remote']['fs_name'])
 
     def peer_add(self, fs_name, fs_id, peer_spec, remote_fs_name=None):
+        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+        vbefore = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
+
         if remote_fs_name:
             self.run_ceph_cmd("fs", "snapshot", "mirror", "peer_add", fs_name, peer_spec, remote_fs_name)
         else:
@@ -82,7 +111,15 @@ class TestMirroring(CephFSTestCase):
         time.sleep(10)
         self.verify_peer_added(fs_name, fs_id, peer_spec, remote_fs_name)
 
+        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+        vafter = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
+
+        self.assertGreater(vafter["counters"]["mirroring_peers"], vbefore["counters"]["mirroring_peers"])
+
     def peer_remove(self, fs_name, fs_id, peer_spec):
+        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+        vbefore = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
+
         peer_uuid = self.get_peer_uuid(peer_spec)
         self.run_ceph_cmd("fs", "snapshot", "mirror", "peer_remove", fs_name, peer_uuid)
         time.sleep(10)
@@ -90,6 +127,11 @@ class TestMirroring(CephFSTestCase):
         res = self.mirror_daemon_command(f'mirror status for fs: {fs_name}',
                                          'fs', 'mirror', 'status', f'{fs_name}@{fs_id}')
         self.assertTrue(res['peers'] == {} and res['snap_dirs']['dir_count'] == 0)
+
+        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+        vafter = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
+
+        self.assertLess(vafter["counters"]["mirroring_peers"], vbefore["counters"]["mirroring_peers"])
 
     def bootstrap_peer(self, fs_name, client_name, site_name):
         outj = json.loads(self.get_ceph_cmd_stdout(
@@ -102,6 +144,8 @@ class TestMirroring(CephFSTestCase):
                           "import", fs_name, token)
 
     def add_directory(self, fs_name, fs_id, dir_name):
+        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+        vbefore = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
         # get initial dir count
         res = self.mirror_daemon_command(f'mirror status for fs: {fs_name}',
                                          'fs', 'mirror', 'status', f'{fs_name}@{fs_id}')
@@ -118,7 +162,14 @@ class TestMirroring(CephFSTestCase):
         log.debug(f'new dir_count={new_dir_count}')
         self.assertTrue(new_dir_count > dir_count)
 
+        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+        vafter = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
+
+        self.assertGreater(vafter["counters"]["directory_count"], vbefore["counters"]["directory_count"])
+
     def remove_directory(self, fs_name, fs_id, dir_name):
+        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+        vbefore = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
         # get initial dir count
         res = self.mirror_daemon_command(f'mirror status for fs: {fs_name}',
                                          'fs', 'mirror', 'status', f'{fs_name}@{fs_id}')
@@ -134,6 +185,11 @@ class TestMirroring(CephFSTestCase):
         new_dir_count = res['snap_dirs']['dir_count']
         log.debug(f'new dir_count={new_dir_count}')
         self.assertTrue(new_dir_count < dir_count)
+
+        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+        vafter = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
+
+        self.assertLess(vafter["counters"]["directory_count"], vbefore["counters"]["directory_count"])
 
     def check_peer_status(self, fs_name, fs_id, peer_spec, dir_name, expected_snap_name,
                           expected_snap_count):
