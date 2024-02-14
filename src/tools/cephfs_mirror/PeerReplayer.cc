@@ -12,6 +12,8 @@
 #include "common/ceph_context.h"
 #include "common/debug.h"
 #include "common/errno.h"
+#include "common/perf_counters.h"
+#include "common/perf_counters_key.h"
 #include "FSMirror.h"
 #include "PeerReplayer.h"
 #include "Utils.h"
@@ -25,6 +27,18 @@
                            << m_peer.uuid << ") " << __func__
 
 using namespace std;
+
+// Performance Counters
+enum {
+  l_cephfs_mirror_peer_replayer_first = 6000,
+  l_cephfs_mirror_peer_replayer_snaps_synced,
+  l_cephfs_mirror_peer_replayer_snaps_deleted,
+  l_cephfs_mirror_peer_replayer_snaps_renamed,
+  l_cephfs_mirror_peer_replayer_snap_sync_failures,
+  l_cephfs_mirror_peer_replayer_avg_sync_time,
+  l_cephfs_mirror_peer_replayer_sync_bytes,
+  l_cephfs_mirror_peer_replayer_last,
+};
 
 namespace cephfs {
 namespace mirror {
@@ -161,10 +175,36 @@ PeerReplayer::PeerReplayer(CephContext *cct, FSMirror *fs_mirror,
                                                  SERVICE_DAEMON_FAILED_DIR_COUNT_KEY, (uint64_t)0);
   m_service_daemon->add_or_update_peer_attribute(m_filesystem.fscid, m_peer,
                                                  SERVICE_DAEMON_RECOVERED_DIR_COUNT_KEY, (uint64_t)0);
+
+  std::string labels = ceph::perf_counters::key_create("cephfs_mirror_peers",
+						       {{"source_fscid", stringify(m_filesystem.fscid)},
+							{"source_filesystem", m_filesystem.fs_name},
+							{"peer_cluster_name", m_peer.remote.cluster_name},
+							{"peer_cluster_filesystem", m_peer.remote.fs_name}});
+  PerfCountersBuilder plb(m_cct, labels, l_cephfs_mirror_peer_replayer_first,
+			  l_cephfs_mirror_peer_replayer_last);
+  auto prio = m_cct->_conf.get_val<int64_t>("cephfs_mirror_perf_stats_prio");
+  plb.add_u64_counter(l_cephfs_mirror_peer_replayer_snaps_synced,
+		      "snaps_synced", "Snapshots Synchronized", "sync", prio);
+  plb.add_u64_counter(l_cephfs_mirror_peer_replayer_snaps_deleted,
+		      "snaps_deleted", "Snapshots Deleted", "del", prio);
+  plb.add_u64_counter(l_cephfs_mirror_peer_replayer_snaps_renamed,
+		      "snaps_renamed", "Snapshots Renamed", "ren", prio);
+  plb.add_u64_counter(l_cephfs_mirror_peer_replayer_snap_sync_failures,
+		      "sync_failures", "Snapshot Sync Failures", "fail", prio);
+  plb.add_time_avg(l_cephfs_mirror_peer_replayer_avg_sync_time,
+		   "avg_sync_time", "Average Sync Time", "asyn", prio);
+  plb.add_u64_counter(l_cephfs_mirror_peer_replayer_sync_bytes,
+		      "sync_bytes", "Sync Bytes", "sbye", prio);
+  m_perf_counters.reset(plb.create_perf_counters());
+  m_cct->get_perfcounters_collection()->add(m_perf_counters.get());
 }
 
 PeerReplayer::~PeerReplayer() {
   delete m_asok_hook;
+  if (m_perf_counters) {
+    m_cct->get_perfcounters_collection()->remove(m_perf_counters.get());
+  }
 }
 
 int PeerReplayer::init() {
@@ -516,6 +556,7 @@ int PeerReplayer::propagate_snap_deletes(const std::string &dir_root,
       return r;
     }
     inc_deleted_snap(dir_root);
+    m_perf_counters->inc(l_cephfs_mirror_peer_replayer_snaps_deleted);
   }
 
   return 0;
@@ -539,6 +580,7 @@ int PeerReplayer::propagate_snap_renames(
       return r;
     }
     inc_renamed_snap(dir_root);
+    m_perf_counters->inc(l_cephfs_mirror_peer_replayer_snaps_renamed);
   }
 
   return 0;
@@ -694,6 +736,7 @@ int PeerReplayer::remote_file_op(const std::string &dir_root, const std::string 
         derr << ": failed to copy path=" << epath << ": " << cpp_strerror(r) << dendl;
         return r;
       }
+      m_perf_counters->inc(l_cephfs_mirror_peer_replayer_sync_bytes, stx.stx_size);
     } else if (S_ISLNK(stx.stx_mode)) {
       // free the remote link before relinking
       r = ceph_unlinkat(m_remote_mount, fh.r_fd_dir_root, epath.c_str(), 0);
@@ -1457,7 +1500,13 @@ int PeerReplayer::do_sync_snaps(const std::string &dir_root) {
       clear_current_syncing_snap(dir_root);
       return r;
     }
+    m_perf_counters->inc(l_cephfs_mirror_peer_replayer_snaps_synced);
     std::chrono::duration<double> duration = clock::now() - start;
+
+    utime_t d;
+    d.set_from_double(duration.count());
+    m_perf_counters->tinc(l_cephfs_mirror_peer_replayer_avg_sync_time, d);
+
     set_last_synced_stat(dir_root, it->first, it->second, duration.count());
     if (--snaps_per_cycle == 0) {
       break;
@@ -1481,6 +1530,7 @@ void PeerReplayer::sync_snaps(const std::string &dir_root,
   locker.lock();
   if (r < 0) {
     _inc_failed_count(dir_root);
+    m_perf_counters->inc(l_cephfs_mirror_peer_replayer_snap_sync_failures);
   } else {
     _reset_failed_count(dir_root);
   }
