@@ -8,6 +8,8 @@
 #include "common/debug.h"
 #include "common/errno.h"
 #include "common/WorkQueue.h"
+#include "common/perf_counters.h"
+#include "common/perf_counters_key.h"
 #include "include/stringify.h"
 #include "msg/Messenger.h"
 #include "FSMirror.h"
@@ -24,6 +26,14 @@
 #define dout_prefix *_dout << "cephfs::mirror::FSMirror " << __func__
 
 using namespace std;
+
+// Performance Counters
+enum {
+  l_cephfs_mirror_fs_mirror_first = 5000,
+  l_cephfs_mirror_fs_mirror_peers,
+  l_cephfs_mirror_fs_mirror_dir_count,
+  l_cephfs_mirror_fs_mirror_last,
+};
 
 namespace cephfs {
 namespace mirror {
@@ -107,6 +117,18 @@ FSMirror::FSMirror(CephContext *cct, const Filesystem &filesystem, uint64_t pool
     m_asok_hook(new MirrorAdminSocketHook(cct, filesystem, this)) {
   m_service_daemon->add_or_update_fs_attribute(m_filesystem.fscid, SERVICE_DAEMON_DIR_COUNT_KEY,
                                                (uint64_t)0);
+
+  std::string labels = ceph::perf_counters::key_create("cephfs_mirror_mirrored_filesystems",
+						       {{"filesystem", m_filesystem.fs_name}});
+  PerfCountersBuilder plb(m_cct, labels, l_cephfs_mirror_fs_mirror_first,
+			  l_cephfs_mirror_fs_mirror_last);
+  auto prio = m_cct->_conf.get_val<int64_t>("cephfs_mirror_perf_stats_prio");
+  plb.add_u64(l_cephfs_mirror_fs_mirror_peers,
+	      "mirroring_peers", "Mirroring Peers", "mpee", prio);
+  plb.add_u64(l_cephfs_mirror_fs_mirror_dir_count,
+	      "directory_count", "Directory Count", "dirc", prio);
+  m_perf_counters.reset(plb.create_perf_counters());
+  m_cct->get_perfcounters_collection()->add(m_perf_counters.get());
 }
 
 FSMirror::~FSMirror() {
@@ -120,6 +142,9 @@ FSMirror::~FSMirror() {
   // outside the lock so that in-progress commands can acquire
   // lock and finish executing.
   delete m_asok_hook;
+  if (m_perf_counters) {
+    m_cct->get_perfcounters_collection()->remove(m_perf_counters.get());
+  }
 }
 
 int FSMirror::init_replayer(PeerReplayer *peer_replayer) {
@@ -355,6 +380,7 @@ void FSMirror::handle_acquire_directory(string_view dir_path) {
       peer_replayer->add_directory(dir_path);
     }
   }
+  m_perf_counters->set(l_cephfs_mirror_fs_mirror_dir_count, m_directories.size());
 }
 
 void FSMirror::handle_release_directory(string_view dir_path) {
@@ -372,6 +398,7 @@ void FSMirror::handle_release_directory(string_view dir_path) {
         peer_replayer->remove_directory(dir_path);
       }
     }
+    m_perf_counters->set(l_cephfs_mirror_fs_mirror_dir_count, m_directories.size());
   }
 }
 
@@ -395,6 +422,7 @@ void FSMirror::add_peer(const Peer &peer) {
   }
   m_peer_replayers.emplace(peer, std::move(replayer));
   ceph_assert(m_peer_replayers.size() == 1); // support only a single peer
+  m_perf_counters->inc(l_cephfs_mirror_fs_mirror_peers);
 }
 
 void FSMirror::remove_peer(const Peer &peer) {
@@ -415,6 +443,7 @@ void FSMirror::remove_peer(const Peer &peer) {
     dout(5) << ": shutting down replayers for peer=" << peer << dendl;
     shutdown_replayer(replayer.get());
   }
+  m_perf_counters->dec(l_cephfs_mirror_fs_mirror_peers);
 }
 
 void FSMirror::mirror_status(Formatter *f) {
