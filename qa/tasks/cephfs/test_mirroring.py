@@ -143,9 +143,11 @@ class TestMirroring(CephFSTestCase):
         self.run_ceph_cmd("fs", "snapshot", "mirror", "peer_bootstrap",
                           "import", fs_name, token)
 
-    def add_directory(self, fs_name, fs_id, dir_name):
-        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
-        vbefore = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
+    def add_directory(self, fs_name, fs_id, dir_name, check_perf_counter=True):
+        if check_perf_counter:
+            res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+            vbefore = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
+
         # get initial dir count
         res = self.mirror_daemon_command(f'mirror status for fs: {fs_name}',
                                          'fs', 'mirror', 'status', f'{fs_name}@{fs_id}')
@@ -162,8 +164,9 @@ class TestMirroring(CephFSTestCase):
         log.debug(f'new dir_count={new_dir_count}')
         self.assertTrue(new_dir_count > dir_count)
 
-        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
-        vafter = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
+        if check_perf_counter:
+            res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+            vafter = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
 
         self.assertGreater(vafter["counters"]["directory_count"], vbefore["counters"]["directory_count"])
 
@@ -388,7 +391,7 @@ class TestMirroring(CephFSTestCase):
     def test_add_directory_with_mirroring_disabled(self):
         # try adding a directory when mirroring is not enabled
         try:
-            self.add_directory(self.primary_fs_name, self.primary_fs_id, "/d1")
+            self.add_directory(self.primary_fs_name, self.primary_fs_id, "/d1", check_perf_counter=False)
         except CommandFailedError as ce:
             if ce.exitstatus != errno.EINVAL:
                 raise RuntimeError(-errno.EINVAL, 'incorrect error code when adding a directory')
@@ -400,7 +403,7 @@ class TestMirroring(CephFSTestCase):
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
         self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d1')
         try:
-            self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d1')
+            self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d1', check_perf_counter=False)
         except CommandFailedError as ce:
             if ce.exitstatus != errno.EEXIST:
                 raise RuntimeError(-errno.EINVAL, 'incorrect error code when re-adding a directory')
@@ -420,7 +423,7 @@ class TestMirroring(CephFSTestCase):
     def test_add_relative_directory_path(self):
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
         try:
-            self.add_directory(self.primary_fs_name, self.primary_fs_id, './d1')
+            self.add_directory(self.primary_fs_name, self.primary_fs_id, './d1', check_perf_counter=False)
         except CommandFailedError as ce:
             if ce.exitstatus != errno.EINVAL:
                 raise RuntimeError(-errno.EINVAL, 'incorrect error code when adding a relative path dir')
@@ -434,7 +437,7 @@ class TestMirroring(CephFSTestCase):
         self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d1/d2/d3')
         def check_add_command_failure(dir_path):
             try:
-                self.add_directory(self.primary_fs_name, self.primary_fs_id, dir_path)
+                self.add_directory(self.primary_fs_name, self.primary_fs_id, dir_path, check_perf_counter=False)
             except CommandFailedError as ce:
                 if ce.exitstatus != errno.EEXIST:
                     raise RuntimeError(-errno.EINVAL, 'incorrect error code when re-adding a directory')
@@ -458,7 +461,7 @@ class TestMirroring(CephFSTestCase):
         self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d1/d2/')
         def check_add_command_failure(dir_path):
             try:
-                self.add_directory(self.primary_fs_name, self.primary_fs_id, dir_path)
+                self.add_directory(self.primary_fs_name, self.primary_fs_id, dir_path, check_perf_counter=False)
             except CommandFailedError as ce:
                 if ce.exitstatus != errno.EINVAL:
                     raise RuntimeError(-errno.EINVAL, 'incorrect error code when adding a directory')
