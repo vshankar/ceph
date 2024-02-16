@@ -100,9 +100,10 @@ class TestMirroring(CephFSTestCase):
         else:
             self.assertTrue(self.fs_name == res['peers'][peer_uuid]['remote']['fs_name'])
 
-    def peer_add(self, fs_name, fs_id, peer_spec, remote_fs_name=None):
-        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
-        vbefore = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
+    def peer_add(self, fs_name, fs_id, peer_spec, remote_fs_name=None, check_perf_counter=True):
+        if check_perf_counter:
+            res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+            vbefore = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
 
         if remote_fs_name:
             self.run_ceph_cmd("fs", "snapshot", "mirror", "peer_add", fs_name, peer_spec, remote_fs_name)
@@ -111,10 +112,10 @@ class TestMirroring(CephFSTestCase):
         time.sleep(10)
         self.verify_peer_added(fs_name, fs_id, peer_spec, remote_fs_name)
 
-        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
-        vafter = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
-
-        self.assertGreater(vafter["counters"]["mirroring_peers"], vbefore["counters"]["mirroring_peers"])
+        if check_perf_counter:
+            res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+            vafter = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
+            self.assertGreater(vafter["counters"]["mirroring_peers"], vbefore["counters"]["mirroring_peers"])
 
     def peer_remove(self, fs_name, fs_id, peer_spec):
         res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
@@ -143,9 +144,11 @@ class TestMirroring(CephFSTestCase):
         self.run_ceph_cmd("fs", "snapshot", "mirror", "peer_bootstrap",
                           "import", fs_name, token)
 
-    def add_directory(self, fs_name, fs_id, dir_name):
-        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
-        vbefore = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
+    def add_directory(self, fs_name, fs_id, dir_name, check_perf_counter=True):
+        if check_perf_counter:
+            res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+            vbefore = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
+
         # get initial dir count
         res = self.mirror_daemon_command(f'mirror status for fs: {fs_name}',
                                          'fs', 'mirror', 'status', f'{fs_name}@{fs_id}')
@@ -162,10 +165,10 @@ class TestMirroring(CephFSTestCase):
         log.debug(f'new dir_count={new_dir_count}')
         self.assertTrue(new_dir_count > dir_count)
 
-        res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
-        vafter = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
-
-        self.assertGreater(vafter["counters"]["directory_count"], vbefore["counters"]["directory_count"])
+        if check_perf_counter:
+            res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
+            vafter = res[TestMirroring.PERF_COUNTER_KEY_NAME_CEPHFS_MIRROR_FS][0]
+            self.assertGreater(vafter["counters"]["directory_count"], vbefore["counters"]["directory_count"])
 
     def remove_directory(self, fs_name, fs_id, dir_name):
         res = self.mirror_daemon_command(f'counter dump for fs: {fs_name}', 'counter', 'dump')
@@ -324,7 +327,7 @@ class TestMirroring(CephFSTestCase):
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
 
         try:
-            self.peer_add(self.primary_fs_name, self.primary_fs_id, "client.mirror_remote@ceph")
+            self.peer_add(self.primary_fs_name, self.primary_fs_id, "client.mirror_remote@ceph", check_perf_counter=False)
         except CommandFailedError as ce:
             if ce.exitstatus != errno.EINVAL:
                 raise RuntimeError('invalid errno when adding a matching remote peer')
@@ -338,7 +341,7 @@ class TestMirroring(CephFSTestCase):
 
         # and explicitly specifying the spec (via filesystem name) should fail too
         try:
-            self.peer_add(self.primary_fs_name, self.primary_fs_id, "client.mirror_remote@ceph", self.primary_fs_name)
+            self.peer_add(self.primary_fs_name, self.primary_fs_id, "client.mirror_remote@ceph", self.primary_fs_name, check_perf_counter=False)
         except CommandFailedError as ce:
             if ce.exitstatus != errno.EINVAL:
                 raise RuntimeError('invalid errno when adding a matching remote peer')
@@ -359,7 +362,7 @@ class TestMirroring(CephFSTestCase):
         self.peer_add(self.primary_fs_name, self.primary_fs_id, "client.mirror_remote@ceph", self.secondary_fs_name)
 
         # adding the same peer should be idempotent
-        self.peer_add(self.primary_fs_name, self.primary_fs_id, "client.mirror_remote@ceph", self.secondary_fs_name)
+        self.peer_add(self.primary_fs_name, self.primary_fs_id, "client.mirror_remote@ceph", self.secondary_fs_name, check_perf_counter=False)
 
         # remove peer
         self.peer_remove(self.primary_fs_name, self.primary_fs_id, "client.mirror_remote@ceph")
@@ -369,7 +372,7 @@ class TestMirroring(CephFSTestCase):
     def test_peer_commands_with_mirroring_disabled(self):
         # try adding peer when mirroring is not enabled
         try:
-            self.peer_add(self.primary_fs_name, self.primary_fs_id, "client.mirror_remote@ceph", self.secondary_fs_name)
+            self.peer_add(self.primary_fs_name, self.primary_fs_id, "client.mirror_remote@ceph", self.secondary_fs_name, check_perf_counter=False)
         except CommandFailedError as ce:
             if ce.exitstatus != errno.EINVAL:
                 raise RuntimeError(-errno.EINVAL, 'incorrect error code when adding a peer')
@@ -388,7 +391,7 @@ class TestMirroring(CephFSTestCase):
     def test_add_directory_with_mirroring_disabled(self):
         # try adding a directory when mirroring is not enabled
         try:
-            self.add_directory(self.primary_fs_name, self.primary_fs_id, "/d1")
+            self.add_directory(self.primary_fs_name, self.primary_fs_id, "/d1", check_perf_counter=False)
         except CommandFailedError as ce:
             if ce.exitstatus != errno.EINVAL:
                 raise RuntimeError(-errno.EINVAL, 'incorrect error code when adding a directory')
@@ -400,7 +403,7 @@ class TestMirroring(CephFSTestCase):
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
         self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d1')
         try:
-            self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d1')
+            self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d1', check_perf_counter=False)
         except CommandFailedError as ce:
             if ce.exitstatus != errno.EEXIST:
                 raise RuntimeError(-errno.EINVAL, 'incorrect error code when re-adding a directory')
@@ -420,7 +423,7 @@ class TestMirroring(CephFSTestCase):
     def test_add_relative_directory_path(self):
         self.enable_mirroring(self.primary_fs_name, self.primary_fs_id)
         try:
-            self.add_directory(self.primary_fs_name, self.primary_fs_id, './d1')
+            self.add_directory(self.primary_fs_name, self.primary_fs_id, './d1', check_perf_counter=False)
         except CommandFailedError as ce:
             if ce.exitstatus != errno.EINVAL:
                 raise RuntimeError(-errno.EINVAL, 'incorrect error code when adding a relative path dir')
@@ -434,7 +437,7 @@ class TestMirroring(CephFSTestCase):
         self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d1/d2/d3')
         def check_add_command_failure(dir_path):
             try:
-                self.add_directory(self.primary_fs_name, self.primary_fs_id, dir_path)
+                self.add_directory(self.primary_fs_name, self.primary_fs_id, dir_path, check_perf_counter=False)
             except CommandFailedError as ce:
                 if ce.exitstatus != errno.EEXIST:
                     raise RuntimeError(-errno.EINVAL, 'incorrect error code when re-adding a directory')
@@ -458,7 +461,7 @@ class TestMirroring(CephFSTestCase):
         self.add_directory(self.primary_fs_name, self.primary_fs_id, '/d1/d2/')
         def check_add_command_failure(dir_path):
             try:
-                self.add_directory(self.primary_fs_name, self.primary_fs_id, dir_path)
+                self.add_directory(self.primary_fs_name, self.primary_fs_id, dir_path, check_perf_counter=False)
             except CommandFailedError as ce:
                 if ce.exitstatus != errno.EINVAL:
                     raise RuntimeError(-errno.EINVAL, 'incorrect error code when adding a directory')
@@ -1214,7 +1217,7 @@ class TestMirroring(CephFSTestCase):
         # try adding the primary file system as a peer to secondary file
         # system
         try:
-            self.peer_add(self.secondary_fs_name, self.secondary_fs_id, "client.mirror_remote@ceph", self.primary_fs_name)
+            self.peer_add(self.secondary_fs_name, self.secondary_fs_id, "client.mirror_remote@ceph", self.primary_fs_name, check_perf_counter=False)
         except CommandFailedError as ce:
             if ce.exitstatus != errno.EINVAL:
                 raise RuntimeError('invalid errno when adding a primary file system')
