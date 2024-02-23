@@ -6809,6 +6809,7 @@ void Client::_abort_mds_sessions(int err)
 
 void Client::_unmount(bool abort)
 {
+  ldout(cct, 2) << __func__ << ": unmounting - checking RWRef" << dendl;
   /*
    * We are unmounting the client.
    *
@@ -6819,7 +6820,9 @@ void Client::_unmount(bool abort)
   RWRef_t mref_writer(mount_state, CLIENT_UNMOUNTING, false);
   if (!mref_writer.is_first_writer())
     return;
+  ldout(cct, 2) << __func__ << ": unmounting - waiting for any readers" << dendl;
   mref_writer.wait_readers_done();
+  ldout(cct, 2) << __func__ << ": unmounting - done waiting for readers" << dendl;
 
   std::unique_lock lock{client_lock};
 
