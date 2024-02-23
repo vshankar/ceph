@@ -6,6 +6,53 @@ from teuthology.exceptions import CommandFailedError
 
 log = logging.getLogger(__name__)
 
+class TestHardlinkRemoteAuth(CephFSTestCase):
+    MDSS_REQUIRED = 3
+    CLIENTS_REQUIRED = 1
+
+    def _setup_subtrees(self):
+        self.fs.set_max_mds(3)
+        self.fs.wait_for_daemons()
+
+        path1 = 'd1/d11/'
+        self.mount_a.run_shell(['mkdir', '-p', path1])
+        self.mount_a.run_shell(['touch', f'{path1}/xfile'])
+        self.mount_a.run_shell(['sync', path1])
+
+        path2 = 'd2/d22/'
+        self.mount_a.run_shell(['mkdir', '-p', path2])
+        self.mount_a.run_shell(['ln', f'{path1}/xfile', f'{path2}/yfile'])
+        self.mount_a.run_shell(['sync', path2])
+
+        path3 = 'd3/d33/'
+        self.mount_a.run_shell(['mkdir', '-p', path3])
+        self.mount_a.run_shell(['touch', f'{path1}/xfile', f'{path3}/zfile'])
+        self.mount_a.run_shell(['sync', path3])
+
+        # pins
+        self.mount_a.setfattr("d1/d11", "ceph.dir.pin", "0")
+        self.mount_a.setfattr("d2/d22", "ceph.dir.pin", "1")
+        self.mount_a.setfattr("d3/d33", "ceph.dir.pin", "2")
+
+        self._wait_subtrees([('/d3/d33', 2), ('/d2/d22', 1), ('/d1/d11', 0)], status=None, rank=0)
+        self._wait_subtrees([('/d2/d22', 1)], status=None, rank=1)
+        self._wait_subtrees([('/d3/d33', 2)], status=None, rank=2)
+
+        for rank in range(3):
+            self.fs.rank_tell(["flush", "journal"], rank)
+
+    def test_hardlink_remote_auth(self):
+        self._setup_subtrees()
+
+        self.fs.mds_fail_restart()
+        self.fs.wait_for_daemons()
+
+        self.mount_a.umount_wait()
+        self.mount_a.mount_wait()
+
+        self.mount_a.lstat(f'{path2}/yfile')
+        self.mount_a.lstat(f'{path3}/yfile')
+
 class TestScrub2(CephFSTestCase):
     MDSS_REQUIRED = 3
     CLIENTS_REQUIRED = 1
