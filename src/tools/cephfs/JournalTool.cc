@@ -139,6 +139,12 @@ int JournalTool::main(std::vector<const char*> &argv)
   }
  
   auto& fs = fsmap->get_filesystem(role_selector.get_ns());
+  stringstream (rank_str.substr(rank_str.find(':') + 1)) >> rank;
+  if (fs.get_mds_map().is_active(rank)) {
+    derr << "Cannot run cephfs-journal-tool on an active file system!" << dendl;
+    return -CEPHFS_EPERM;
+  }
+
   int64_t const pool_id = fs.get_mds_map().get_metadata_pool();
   dout(4) << "JournalTool: resolving pool " << pool_id << dendl;
   std::string pool_name;
