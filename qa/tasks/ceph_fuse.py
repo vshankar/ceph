@@ -4,6 +4,7 @@ Ceph FUSE client task
 
 import contextlib
 import logging
+import time
 
 from teuthology import misc
 from tasks.cephfs.fuse_mount import FuseMount
@@ -174,12 +175,13 @@ def task(ctx, config):
     try:
         yield all_mounts
     finally:
-        log.info('Unmounting ceph-fuse clients...')
+        log.info('Not unmounting ceph-fuse clients (hack)...')
+        time.sleep(3600)
 
-        for info in mounted_by_me.values():
-            # Conditional because an inner context might have umounted it
-            mount = info["mount"]
-            if mount.is_mounted():
-                mount.umount_wait()
-        for remote in remotes:
-            FuseMount.cleanup_stale_netnses_and_bridge(remote)
+        #for info in mounted_by_me.values():
+        #    # Conditional because an inner context might have umounted it
+        #    mount = info["mount"]
+        #    if mount.is_mounted():
+        #        mount.umount_wait()
+        #for remote in remotes:
+        #    FuseMount.cleanup_stale_netnses_and_bridge(remote)
