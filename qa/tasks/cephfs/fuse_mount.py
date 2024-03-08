@@ -326,9 +326,10 @@ class FuseMount(CephFSMount):
         try:
             log.info('Running fusermount -u on {name}...'.format(name=self.client_remote.name))
             stderr = StringIO()
+            stdout = StringIO()
             self.client_remote.run(
-                args=['sudo', 'fusermount', '-u', self.hostfs_mntpt],
-                stderr=stderr, timeout=UMOUNT_TIMEOUT, omit_sudo=False)
+                args=['sudo', 'strace', '-s', '1000', '-f', 'fusermount', '-u', self.hostfs_mntpt],
+                stdout=stdout, stderr=stderr, timeout=UMOUNT_TIMEOUT, omit_sudo=False)
         except run.CommandFailedError:
             if "mountpoint not found" in stderr.getvalue():
                 # This happens if the mount directory doesn't exist
@@ -394,7 +395,7 @@ class FuseMount(CephFSMount):
             self.cleanup()
             return
 
-        # cleanup is set to to fail since clieanup must happen after umount is
+        # cleanup is set to fail since cleanup must happen after umount is
         # complete; otherwise following call to run.wait hangs.
         self.umount(cleanup=False)
 
@@ -405,7 +406,7 @@ class FuseMount(CephFSMount):
         except MaxWhileTries:
             log.error("process failed to terminate after unmount. This probably"
                       " indicates a bug within ceph-fuse.")
-            raise
+            return
         except CommandFailedError:
             if require_clean:
                 raise
