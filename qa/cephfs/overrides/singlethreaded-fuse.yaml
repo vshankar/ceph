@@ -1,0 +1,7 @@
+# Lengthen the timeout for thrashed MDS
+overrides:
+  ceph:
+    conf:
+      client:
+        fuse_debug: true
+        fuse_multithreaded: false
