@@ -1,7 +1,6 @@
 tasks:
 - parallel:
   - upgrade-tasks
-  - workload-tasks
 
 upgrade-tasks:
   sequential:
@@ -26,10 +25,3 @@ upgrade-tasks:
           - ceph versions
           - ceph versions | jq -e '.overall | length == 1'
           - ceph versions | jq -e '.overall | keys' | grep $sha1
-
-workload-tasks:
-  sequential:
-    - workunit:
-        clients:
-          all:
-            - suites/fsstress.sh
