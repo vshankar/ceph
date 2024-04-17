@@ -202,7 +202,7 @@ int JournalTool::validate_type(const std::string &type)
   if (type == "mdlog" || type == "purge_queue") {
     return 0;
   }
-  return -1;
+  return -CEPHFS_EPERM;
 }
 
 std::string JournalTool::gen_dump_file_path(const std::string &prefix) {
