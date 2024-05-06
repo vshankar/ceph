@@ -1,0 +1,7 @@
+# after some recent clog changes, MGR_DOWN warnings are generated before the
+# NFS test cases execution begins and this leads to the job getting failed.
+
+overrides:
+  ceph:
+    log-ignorelist:
+      - MGR_DOWN
