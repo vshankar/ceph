@@ -3,6 +3,11 @@ meta:
    setup ceph/v17.2.0
 
 tasks:
+- install:
+    branch: quincy
+    exclude_packages:
+      - ceph-volume
+- print: "**** done install task..."
 - cephadm:
     image: quay.io/ceph/ceph:v17.2.0
     roleless: true
