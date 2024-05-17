@@ -13,7 +13,7 @@ tasks:
       - sudo modprobe -r ceph
       - sudo modprobe ceph disable_send_metrics=on
 - install:
-    tag: v16.2.0
+    branch: pacific
     exclude_packages:
       - ceph-volume
 - print: "**** done install task..."
