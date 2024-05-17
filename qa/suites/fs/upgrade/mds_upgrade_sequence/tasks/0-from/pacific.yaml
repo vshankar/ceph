@@ -1,6 +1,6 @@
 meta:
 - desc: |
-   setup ceph/pacific
+   setup ceph/v16.2.15
 
 tasks:
 - install:
@@ -9,9 +9,9 @@ tasks:
       - ceph-volume
 - print: "**** done install task..."
 - cephadm:
-    image: quay.ceph.io/ceph-ci/ceph:pacific
+    image: quay.io/ceph/ceph:v16.2.15
     roleless: true
-    cephadm_branch: pacific
+    cephadm_branch: v16.2.15
     cephadm_git_url: https://github.com/ceph/ceph
     conf:
       osd:
