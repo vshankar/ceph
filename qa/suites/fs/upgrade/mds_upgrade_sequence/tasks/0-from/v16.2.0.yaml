@@ -4,27 +4,27 @@ teuthology:
 
 meta:
 - desc: |
-   setup ceph/pacific v16.2.4
+   setup ceph/pacific v16.2.0
 
 tasks:
-# Disable metrics sending by kclient as it may crash (assert) a v16.2.4 MDS
+# Disable metrics sending by kclient as it may crash (assert) a v16.2.0 MDS
 - pexec:
     clients:
       - sudo modprobe -r ceph
       - sudo modprobe ceph disable_send_metrics=on
 - install:
-    tag: v16.2.4
+    tag: v16.2.0
     exclude_packages:
       - ceph-volume
 - print: "**** done install task..."
 - cephadm:
     roleless: true
-    image: quay.io/ceph/ceph:v16.2.4
-    cephadm_branch: v16.2.4
+    image: quay.io/ceph/ceph:v16.2.0
+    cephadm_branch: v16.2.0
     cephadm_git_url: https://github.com/ceph/ceph
-    # needed for v16.2.4 due to --skip-admin-label
+    # needed for v16.2.0 due to --skip-admin-label
     avoid_pacific_features: true
-- print: "**** done starting v16.2.4"
+- print: "**** done starting v16.2.0"
 - cephadm.shell:
     host.a:
       - ceph orch status
