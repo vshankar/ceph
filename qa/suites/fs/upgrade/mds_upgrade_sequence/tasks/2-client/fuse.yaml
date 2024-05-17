@@ -1,3 +1,8 @@
 tasks:
+- cephadm.shell:
+    host.a:
+      - ceph config set client fuse_splice_read false
+      - ceph config set client fuse_splice_write false
+      - ceph config set client fuse_splice_move false
 - ceph-fuse:
 - print: "**** done client"
