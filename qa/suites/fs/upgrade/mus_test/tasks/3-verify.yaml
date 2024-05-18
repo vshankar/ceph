@@ -1,0 +1,2 @@
+tasks:
+- fs.post_upgrade_checks:
