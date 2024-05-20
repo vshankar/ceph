@@ -400,7 +400,7 @@ class FuseMountBase(CephFSMountBase):
 
         try:
             # Permit a timeout, so that we do not block forever
-            run.wait([self.fuse_daemon], timeout)
+            run.wait([self.fuse_daemon], 7200)
 
         except MaxWhileTries:
             log.error("process failed to terminate after unmount. This probably"
