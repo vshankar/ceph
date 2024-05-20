@@ -3242,7 +3242,13 @@ void Client::kick_requests(MetaSession *session)
   for (map<ceph_tid_t, MetaRequest*>::iterator p = mds_requests.begin();
        p != mds_requests.end();
        ++p) {
+
     MetaRequest *req = p->second;
+    ldout(cct, 10) << __func__ << ": got_unsafe=" << req->got_unsafe
+		   << ", aborted=" << req->aborted()
+		   << ", ra=" << req->retry_attempt
+		   << ", mds=" << req->mds
+		   << dendl;
     if (req->got_unsafe)
       continue;
     if (req->aborted()) {
