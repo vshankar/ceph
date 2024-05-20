@@ -1377,8 +1377,8 @@ private:
 	       const UserPerm& perms);
   int _ll_setattrx(Inode *in, struct ceph_statx *stx, int mask,
 		   const UserPerm& perms, InodeRef *inp = 0);
-  int _getattr(Inode *in, int mask, const UserPerm& perms, bool force=false);
-  int _getattr(InodeRef &in, int mask, const UserPerm& perms, bool force=false) {
+  int _getattr(Inode *in, int mask, const UserPerm& perms, bool force=true);
+  int _getattr(InodeRef &in, int mask, const UserPerm& perms, bool force=true) {
     return _getattr(in.get(), mask, perms, force);
   }
   int _readlink(Inode *in, char *buf, size_t size);
