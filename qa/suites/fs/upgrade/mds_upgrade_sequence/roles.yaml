@@ -1,11 +1,20 @@
 roles:
 - - host.a
-  - client.0
   - osd.0
   - osd.1
   - osd.2
+  - mds.a
+  - mds.b
 - - host.b
-  - client.1
   - osd.3
   - osd.4
   - osd.5
+  - mds.c
+  - mds.d
+- - host.c
+  - client.0
+  - client.1
+openstack:
+- volumes: # attached to each instance
+    count: 4
+    size: 10 # GB
