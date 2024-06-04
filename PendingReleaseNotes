@@ -224,6 +224,8 @@ CephFS: Disallow delegating preallocated inode ranges to clients. Config
 * Monitoring: RGW S3 Analytics: A new Grafana dashboard is now available, enabling you to
   visualize per bucket and user analytics data, including total GETs, PUTs, Deletes,
   Copies, and list metrics.
+* CephFS: MDS emits a warning with estimated replay completion time  when replay
+  runs for more than 30 seconds.
 
 >=18.0.0
 
