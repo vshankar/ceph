@@ -25,6 +25,7 @@
 #include "mds/MDSRank.h"
 #include "mds/MDSMap.h"
 #include "mds/Locker.h"
+#include "mds/mdstypes.h"
 
 #include "Beacon.h"
 
@@ -546,6 +547,19 @@ void Beacon::notify_health(MDSRank const *mds)
 	m.metadata["client_count"] = stringify(laggy_clients.size());
 	health.metrics.push_back(std::move(m));
       }
+    }
+  }
+  if (mds->is_replay()) {
+    CachedStackStringStream css;
+    auto estimate = mds->mdlog->get_estimated_replay_finish_time();
+    // this probably should be configurable, however, its fine to report
+    // if replay is running for more than 30 seconds.
+    if (estimate.elapsed_time > std::chrono::seconds(30)) {
+      *css << "replay: " << estimate.percent_complete << "% complete - elapsed time: "
+	   << estimate.elapsed_time << "s, estimated time remaining: "
+	   << estimate.estimated_time << "s";
+      MDSHealthMetric m(MDS_HEALTH_ESTIMATED_REPLAY_TIME, HEALTH_WARN, css->strv());
+      health.metrics.push_back(m);
     }
   }
 }

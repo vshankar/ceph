@@ -1016,3 +1016,8 @@ void snaprealm_reconnect_t::generate_test_instances(std::list<snaprealm_reconnec
   ls.back()->realm.seq = 2;
   ls.back()->realm.parent = 1;
 }
+
+void EstimatedReplayTime::print(std::ostream& out) {
+  out << "replay: " << percent_complete << "% complete - elapsed time: "
+      << elapsed_time << "s, estimated time remaining: " << estimated_time << "s";
+}
