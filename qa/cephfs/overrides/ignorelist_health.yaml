@@ -25,3 +25,4 @@ overrides:
       - slow operation indications in BlueStore
       - experiencing slow operations in BlueStore
       - MGR_MODULE_ERROR
+      - MDS_ESTIMATED_REPLAY_TIME
