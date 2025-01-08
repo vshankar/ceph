@@ -1,0 +1,34 @@
+tasks:
+- parallel:
+   - workload-client-1
+   - workload-client-2
+   - workload-client-3
+   - workload-client-4
+workload-client-1:
+  sequential:
+  - kclient: [client.0]
+  - workunit:
+      clients:
+         - client.0:
+             - suites/concurrent_readdir_rename.sh
+workload-client-2:
+  sequential:
+  - kclient: [client.1]
+  - workunit:
+      clients:
+         - client.1:
+             - suites/concurrent_readdir_rename.sh
+workload-client-3:
+  sequential:
+  - kclient: [client.2]
+  - workunit:
+      clients:
+         - client.2:
+             - suites/concurrent_readdir_rename.sh
+workload-client-4:
+  sequential:
+  - kclient: [client.3]
+  - workunit:
+      clients:
+         - client.3:
+             - suites/concurrent_readdir_rename.sh
