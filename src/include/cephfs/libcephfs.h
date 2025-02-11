@@ -637,6 +637,37 @@ struct ceph_snapdiff_info
                                    // doesn't exist in the second snapshot
 };
 
+struct ceph_file_blockdiff_result;
+
+struct ceph_file_blockdiff_info
+{
+  struct ceph_mount_info* cmount;
+  struct ceph_file_blockdiff_result* blockp;
+};
+
+struct cblock 
+{
+  uint64_t offset;
+  uint64_t len;
+};
+struct ceph_file_blockdiff_changedblocks
+{
+  uint64_t num_blocks;
+  struct cblock *b;
+};
+
+int ceph_file_blockdiff_init(struct ceph_mount_info* cmount,
+                             const char* root_path,
+                             const char* rel_path,
+                             const char* snap1,
+                             const char* snap2,
+                             struct ceph_file_blockdiff_info* out_info);
+
+int ceph_file_blockdiff(struct ceph_file_blockdiff_info* info,
+                        struct ceph_file_blockdiff_changedblocks* blocks);
+
+int ceph_file_blockdiff_finish(struct ceph_file_blockdiff_info* info);
+
 /**
  * Opens snapdiff stream to get snapshots delta (aka snapdiff).
  *
