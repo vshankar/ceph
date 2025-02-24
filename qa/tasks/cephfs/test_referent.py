@@ -13,8 +13,6 @@ class TestReferentInode(CephFSTestCase):
 
         """
 
-        data_pool_name = self.fs.get_data_pool_name()
-
         self.mount_a.run_shell(["mkdir", "dir0"])
         self.mount_a.run_shell(["touch", "dir0/file1"])
         self.mount_a.run_shell(["ln", "dir0/file1", "dir0/hardlink_file1"])
@@ -30,4 +28,42 @@ class TestReferentInode(CephFSTestCase):
 
         # read the referent inode
         referent_inode = self.fs.read_meta_inode(dir_ino, "hardlink_file1")
-        log.debug(f'real inode={file1_inode}, referent_inode={referent_inode}')
+
+        self.assertFalse(file1_inode['ino'] == referent_inode['ino'])
+
+        # the real inode should track the ereferent inode number
+        self.assertIn(referent_inode['ino'], file1_inode['referent_inodes'])
+
+    def test_referent_reintegration(self):
+        """
+
+        """
+
+        self.mount_a.run_shell(["mkdir", "dir0"])
+        self.mount_a.run_shell(["touch", "dir0/file1"])
+        self.mount_a.run_shell(["ln", "dir0/file1", "dir0/hardlink_file1"])
+        self.mount_a.run_shell(["ln", "dir0/file1", "dir0/hardlink_file2"])
+
+        # remove the primary link
+        self.mount_a.run_shell(["rm", "dir0/file1"])
+
+        # verify that the refrent is now a real inode - the referent list
+        # should have the other other hardlink ino number and not its own.
+
+    def test_multiple_referent_post_reintegration(self):
+        pass
+
+    def test_rename_a_referent_dentry(self):
+        pass
+
+    def test_referent_with_mds_killpoints(self):
+        pass
+
+    def test_referent_with_snapshot(self):
+        pass
+
+    def test_referent_with_mdlog_replay(self):
+        pass
+
+    def test_referent_no_caps(self):
+        pass
