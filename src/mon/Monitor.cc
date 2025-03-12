@@ -106,6 +106,7 @@
 #undef dout_prefix
 #define dout_prefix _prefix(_dout, this)
 using namespace TOPNSPC::common;
+using namespace std::literals;
 
 using std::cout;
 using std::dec;
@@ -612,44 +613,42 @@ void Monitor::write_features(MonitorDBStore::TransactionRef t)
   t->put(MONITOR_NAME, COMPAT_SET_LOC, bl);
 }
 
-const char** Monitor::get_tracked_conf_keys() const
+std::vector<std::string> Monitor::get_tracked_keys() const noexcept
 {
-  static const char* KEYS[] = {
-    "crushtool", // helpful for testing
-    "mon_election_timeout",
-    "mon_lease",
-    "mon_lease_renew_interval_factor",
-    "mon_lease_ack_timeout_factor",
-    "mon_accept_timeout_factor",
+  return {
+    "crushtool"s, // helpful for testing
+    "mon_election_timeout"s,
+    "mon_lease"s,
+    "mon_lease_renew_interval_factor"s,
+    "mon_lease_ack_timeout_factor"s,
+    "mon_accept_timeout_factor"s,
     // clog & admin clog
-    "clog_to_monitors",
-    "clog_to_syslog",
-    "clog_to_syslog_facility",
-    "clog_to_syslog_level",
-    "clog_to_graylog",
-    "clog_to_graylog_host",
-    "clog_to_graylog_port",
-    "mon_cluster_log_to_file",
-    "host",
-    "fsid",
+    "clog_to_monitors"s,
+    "clog_to_syslog"s,
+    "clog_to_syslog_facility"s,
+    "clog_to_syslog_level"s,
+    "clog_to_graylog"s,
+    "clog_to_graylog_host"s,
+    "clog_to_graylog_port"s,
+    "mon_cluster_log_to_file"s,
+    "host"s,
+    "fsid"s,
     // periodic health to clog
-    "mon_health_to_clog",
-    "mon_health_to_clog_interval",
-    "mon_health_to_clog_tick_interval",
+    "mon_health_to_clog"s,
+    "mon_health_to_clog_interval"s,
+    "mon_health_to_clog_tick_interval"s,
     // scrub interval
-    "mon_scrub_interval",
-    "mon_allow_pool_delete",
+    "mon_scrub_interval"s,
+    "mon_allow_pool_delete"s,
     // osdmap pruning - observed, not handled.
-    "mon_osdmap_full_prune_enabled",
-    "mon_osdmap_full_prune_min",
-    "mon_osdmap_full_prune_interval",
-    "mon_osdmap_full_prune_txsize",
+    "mon_osdmap_full_prune_enabled"s,
+    "mon_osdmap_full_prune_min"s,
+    "mon_osdmap_full_prune_interval"s,
+    "mon_osdmap_full_prune_txsize"s,
     // debug options - observed, not handled
-    "mon_debug_extra_checks",
-    "mon_debug_block_osdmap_trim",
-    NULL
+    "mon_debug_extra_checks"s,
+    "mon_debug_block_osdmap_trim"s
   };
-  return KEYS;
 }
 
 void Monitor::handle_conf_change(const ConfigProxy& conf,
@@ -3117,8 +3116,23 @@ void Monitor::get_cluster_status(stringstream &ss, Formatter *f,
     {
       size_t maxlen = 3;
       auto& service_map = mgrstatmon()->get_service_map();
+      std::map<NvmeGroupKey, std::set<std::string>> nvmeof_services;
       for (auto& p : service_map.services) {
-	maxlen = std::max(maxlen, p.first.size());
+        if (p.first == "nvmeof") {
+          auto daemons = p.second.daemons;
+          for (auto& d : daemons) {
+            auto group = d.second.metadata.find("group");
+            auto pool = d.second.metadata.find("pool_name"); 
+            auto gw_id = d.second.metadata.find("id");
+            NvmeGroupKey group_key = std::make_pair(pool->second,  group->second); 
+            nvmeof_services[group_key].insert(gw_id->second);
+            maxlen = std::max(maxlen, 
+                p.first.size() + group->second.size() + pool->second.size() + 4
+              ); // nvmeof (pool.group):
+          }
+        } else {
+          maxlen = std::max(maxlen, p.first.size());
+        }
       }
       string spacing(maxlen - 3, ' ');
       const auto quorum_names = get_quorum_names();
@@ -3164,8 +3178,31 @@ void Monitor::get_cluster_status(stringstream &ss, Formatter *f,
         if (ServiceMap::is_normal_ceph_entity(service)) {
           continue;
         }
+        if (p.first == "nvmeof") {
+          auto created_gws = nvmegwmon()->get_map().created_gws;
+          for (const auto& created_map_pair: created_gws) {
+            const auto& group_key = created_map_pair.first;
+            const NvmeGwMonStates& gw_created_map = created_map_pair.second;
+            const int total = gw_created_map.size();
+            auto& active_gws = nvmeof_services[group_key];
+
+            ss << "    " << p.first << " (" << group_key.first << "." << group_key.second << "): ";
+            ss << string(maxlen - p.first.size() - group_key.first.size() 
+                    - group_key.second.size() - 4, ' ');
+            ss << total << " gateway" << (total > 1 ? "s" : "") << ": " 
+               << active_gws.size() << " active (";
+            for (auto gw = active_gws.begin(); gw != active_gws.end(); ++gw){
+              if (gw != active_gws.begin()) {
+	              ss << ", ";
+              }
+              ss << *gw; 
+            }
+            ss << ") \n";
+          }
+        } else {
 	ss << "    " << p.first << ": " << string(maxlen - p.first.size(), ' ')
 	   << p.second.get_summary() << "\n";
+        }
       }
     }
 
