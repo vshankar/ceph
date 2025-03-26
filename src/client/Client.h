@@ -365,6 +365,8 @@ public:
   int readdir_r(dir_result_t *dirp, struct dirent *de);
   int readdirplus_r(dir_result_t *dirp, struct dirent *de, struct ceph_statx *stx, unsigned want, unsigned flags, Inode **out);
 
+  int get_perf_counters(bufferlist *outbl);
+
   /*
    * Get the next snapshot delta entry.
    *
