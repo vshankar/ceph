@@ -12087,7 +12087,7 @@ bool Client::C_Write_Finisher::try_complete()
 Client::WriteEncMgr::WriteEncMgr(Client *clnt,
                                  Fh *f, int64_t offset, uint64_t size,
                                  bufferlist& bl,
-                                 bool async) : clnt(clnt), whoami(clnt->whoami),
+                                 bool async) : RefCountedObject(clnt->cct), clnt(clnt), whoami(clnt->whoami),
                                                    cct(clnt->cct), fscrypt(clnt->fscrypt.get()),
                                                    f(f), in(f->inode.get()),
                                                    offset(offset), size(size), bl(bl),
