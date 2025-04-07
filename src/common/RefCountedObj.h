@@ -73,6 +73,7 @@ protected:
 
 private:
   void _get() const;
+  void printbt() const;
 
   mutable std::atomic<uint64_t> nref{1};
   CephContext *cct{nullptr};
