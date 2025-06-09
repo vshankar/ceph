@@ -10,4 +10,5 @@ teuthology:
 kernel:
   client:
     branch: testing
+    sha1: 80b7d2b870b97ed9b37fb3e415d757737fa30120
 ktype: upstream
