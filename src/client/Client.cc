@@ -11156,10 +11156,9 @@ retry:
     // C_Read_Sync_NonBlocking::finish().
 
     // trim read based on file size?
-    if (std::cmp_greater_equal(offset, in->size) || (size == 0)) {
-      // read is requested at the EOF or the read len is zero, therefore just
-      // release managed pointers and complete the C_Read_Finisher immediately with 0 bytes
-
+    if (size == 0) {
+      // zero byte read requested -- therefore just release managed
+      // pointers and complete the C_Read_Finisher immediately with 0 bytes
       Context *iof = iofinish.release();
       crf.release();
       iof->complete(0);
@@ -12133,6 +12132,7 @@ void Client::C_nonblocking_fsync_state::advance()
 
     if (waitfor_safe) {
       clnt->put_request(req);
+      waitfor_safe = false;
     }
 
     if (flush_wait && !flush_completed) {
