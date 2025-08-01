@@ -1,0 +1,4 @@
+tasks:
+- ganesha-reconf:
+    cluster_id: 'nfs-ganesha-test'
+    pseudo_path: '/nfsganesha'
