@@ -29,6 +29,8 @@ from .ganesha_conf import (
     RGWFSAL,
     RawBlock,
     CephBlock,
+    LogBlock,
+    NFSV4Block,
     format_block)
 from .exception import NFSException, NFSInvalidOperation, FSNotFound, NFSObjectNotFound
 from .utils import (
@@ -218,12 +220,16 @@ class AppliedExportResults:
         return self.status
 
 class GaneshaExport:
-    # currently, EXPORT and CEPH block.
+    # EXPORT, CEPH and LOG block.
     def __init__(self,
                  export: Export,
-                 ceph_block: Optional[CephBlock] = None) -> None:
+                 ceph_block: Optional[CephBlock] = None,
+                 log_block: Optional[LogBlock] = None,
+                 nfsv4_block: Optional[NFSV4Block] = None) -> None:
         self.export = export
         self.ceph_block = ceph_block
+        self.log_block = log_block
+        self.nfsv4_block = nfsv4_block
 
     # frequently uesd properties so that much of the code that now
     # has moved to using this class can still continue to acess via
@@ -248,20 +254,32 @@ class GaneshaExport:
     def fsal(self):
         return self.export.fsal
 
+    @property
+    def delegations(self):
+        return self.export.delegations
+
     def to_dict(self, full=False) -> Dict[str, Any]:
         export_dict = self.export.to_dict()
-        if not full or not self.ceph_block:
+        if not full or (not self.ceph_block and not self.log_block
+                        and not self.nfsv4_block):
             return export_dict
-        ge_dict = {
-            'export': export_dict,
-            'ceph': self.ceph_block.to_dict()
-            }
+        ge_dict = {'export': export_dict}
+        if self.ceph_block:
+            ge_dict['ceph'] = self.ceph_block.to_dict()
+        if self.log_block:
+            ge_dict['log'] = self.log_block.to_dict()
+        if self.nfsv4_block:
+            ge_dict['nfsv4'] = self.nfsv4_block.to_dict()
         return ge_dict
 
     def to_export_block(self):
         block_str = format_block(self.export.to_export_block())
         if self.ceph_block:
             block_str += format_block(self.ceph_block.to_ceph_block())
+        if self.log_block:
+            block_str += format_block(self.log_block.to_log_block())
+        if self.nfsv4_block:
+            block_str += format_block(self.nfsv4_block.to_nfsv4_block())
         return block_str
 
     def __eq__(self, other: Any) -> bool:
@@ -379,8 +397,10 @@ class ExportMgr:
                 break
         return nid
 
-    def _has_ceph_block(raw_config_parsed: List) -> bool:
-        return len(raw_config_parsed) > 1
+    def _has_ceph_block(raw_config_parsed: Dict) -> bool:
+        return 'CEPH' in raw_config_parsed.keys()
+    def _has_log_block(raw_config_parsed: Dict) -> bool:
+        return 'LOG' in raw_config_parsed.keys()
 
     def _read_raw_config(self, rados_namespace: str) -> None:
         with self.mgr.rados.open_ioctx(self.rados_pool) as ioctx:
@@ -396,16 +416,19 @@ class ExportMgr:
                     log.debug(f'raw_config: {raw_config}')
                     raw_config_parsed = GaneshaConfParser(raw_config).parse()
                     log.debug(f'raw_config_parsed: {raw_config_parsed}')
-                    export_block = raw_config_parsed[0]
-                    # do we have a ceph block?
+                    # mandatory export block
+                    export_block = raw_config_parsed['EXPORT']
+                    # do we have a ceph/log block? (optional)
+                    ceph_block = None
+                    log_block = None
                     if _has_ceph_block(raw_config_parsed):
-                        ceph_block = raw_config_parsed[1]
-                        self.export_conf_objs.append(
+                        ceph_block = raw_config_parsed['CEPH']
+                    if _has_log_block(raw_config_parsed):
+                        log_block = raw_config_parsed['LOG']
+                    self.export_conf_objs.append(
                             GaneshaExport(Export.from_export_block(export_block, rados_namespace),
-                                          CephBlock.from_ceph_block(ceph_block)))
-                    else:
-                        self.export_conf_objs.append(
-                            GaneshaExport(Export.from_export_block(export_block, rados_namespace)))
+                                          CephBlock.from_ceph_block(ceph_block),
+                                          LogBlock.from_log_block(log_block)))
 
     def _save_export(self, cluster_id: str, ganesha_export: GaneshaExport) -> None:
         log.debug('in _save_export')
@@ -462,14 +485,18 @@ class ExportMgr:
                 log.debug(f'raw_config: {raw_config}')
                 raw_config_parsed = GaneshaConfParser(raw_config).parse()
                 log.debug(f'raw_config_parsed: {raw_config_parsed}')
-                export_block = raw_config_parsed[0]
-                # do we have a ceph block?
+                export_block = raw_config_parsed['EXPORT']
+                # do we have a ceph/log block? (optional)
+                ceph_block = None
+                log_block = None
                 if _has_ceph_block(raw_config_parsed):
-                    ceph_block = raw_config_parsed[1]
-                    export = GaneshaExport(Export.from_export_block(export_block, cluster_id),
-                                           CephBlock.from_ceph_block(ceph_block))
-                else:
-                    export = GaneshaExport(Export.from_export_block(export_block, cluster_id))
+                    ceph_block = raw_config_parsed['CEPH']
+                if _has_log_block(raw_config_parsed):
+                    log_block = raw_config_parsed['LOG']
+                self.export_conf_objs.append(
+                    GaneshaExport(Export.from_export_block(export_block, rados_namespace),
+                                  CephBlock.from_ceph_block(ceph_block),
+                                  LogBlock.from_log_block(log_block)))
                 log.debug(f'export: {export}')
                 return export
         except ObjectNotFound:
@@ -661,20 +688,30 @@ class ExportMgr:
 
     def _change_export(self, cluster_id: str, export: Dict,
                        earmark_resolver: Optional[CephFSEarmarkResolver] = None) -> Dict[str, Any]:
-        # if the export json has a ceph section (key), extract it from the export
+        # if the export json has a ceph/log section (key), extract it from the export
         # json to preserver backward compatability.
         ceph_dict = {}
+        log_dict = {}
+        nfsv4_dict = {}
         if "ceph" in export.keys():
             ceph_dict = export.pop("ceph")
-            if not "export" in export.keys():
-                raise Exception('\'export\' key missing in export json')
+        if "log" in export.keys():
+            log_dict = export.pop("log")
+        if "nfsv4" in export.keys():
+            nfsv4_dict = export.pop("nfsv4")
+        if "export" in export.keys():
             export = export.pop("export")
         msg = f'export_dict: {export}'
-        log.exception(msg)
+        log.debug(msg)
         msg = f'ceph_dict: {ceph_dict}'
-        log.exception(msg)
+        log.debug(msg)
+        msg = f'nfsv4_dict: {nfsv4_dict}'
+        log.debug(msg)
+        msg = f'log_dict: {log_dict}'
+        log.debug(msg)
         try:
-            return self._apply_export(cluster_id, export, earmark_resolver, ceph_dict)
+            return self._apply_export(cluster_id, export, earmark_resolver,
+                                      ceph_dict, log_dict, nfsv4_dict)
         except NotImplementedError as e:
             # in theory, the NotImplementedError here may be raised by a hook back to
             # an orchestration module. If the orchestration module supports it the NFS
@@ -835,7 +872,8 @@ class ExportMgr:
                              clients: list = [],
                              sectype: Optional[List[str]] = None,
                              cmount_path: Optional[str] = "/",
-                             earmark_resolver: Optional[CephFSEarmarkResolver] = None
+                             earmark_resolver: Optional[CephFSEarmarkResolver] = None,
+                             delegations: Optional[str] = "none"
                              ) -> Dict[str, Any]:
 
         validate_cephfs_path(self.mgr, fs_name, path)
@@ -860,6 +898,7 @@ class ExportMgr:
                     },
                     "clients": clients,
                     "sectype": sectype,
+                    "delegations": delegations
                 },
                 earmark_resolver
             )
@@ -926,7 +965,9 @@ class ExportMgr:
             cluster_id: str,
             new_export_dict: Dict,
             earmark_resolver: Optional[CephFSEarmarkResolver] = None,
-            ceph_dict: Optional[Dict] = {}) -> Dict[str, str]:
+            ceph_dict: Optional[Dict] = {},
+            log_dict: Optional[Dict] = {},
+            nfsv4_dict: Optional[Dict] = {}) -> Dict[str, str]:
         for k in ['path', 'pseudo']:
             if k not in new_export_dict:
                 raise NFSInvalidOperation(f'Export missing required field {k}')
@@ -972,9 +1013,17 @@ class ExportMgr:
         log.debug(f'ceph_dict: {ceph_dict}')
         if ceph_dict:
             ceph_block = CephBlock.from_dict(ceph_dict)
+        log_block = None
+        log.debug(f'log_dict: {log_dict}')
+        if log_dict:
+            log_block = LogBlock.from_dict(log_dict)
+        nfsv4_block = None
+        log.debug(f'nfsv4_dict: {nfsv4_dict}')
+        if nfsv4_dict:
+            nfsv4_block = NFSV4Block.from_dict(nfsv4_dict)
 
         # use @ganesha_export in place of @new_export here onwards
-        ganesha_export = GaneshaExport(new_export, ceph_block)
+        ganesha_export = GaneshaExport(new_export, ceph_block, log_block, nfsv4_block)
 
         if not old_export:
             if new_export.fsal.name == NFS_GANESHA_SUPPORTED_FSALS[1]:  # only for RGW
@@ -997,7 +1046,10 @@ class ExportMgr:
                                             and old_fsal.fs_name == new_fsal.fs_name
                                             and old_export.path == new_export.path
                                             and old_export.pseudo == new_export.pseudo
-                                            and old_export.ceph_block == ganesha_export.ceph_block)
+                                            and old_export.ceph_block == ganesha_export.ceph_block
+                                            and old_export.log_block == ganesha_export.log_block
+                                            and old_export.nfsv4_block == ganesha_export.nfsv4_block
+                                            and old_export.delegations == ganesha_export.delegations)
 
         if old_export.fsal.name == NFS_GANESHA_SUPPORTED_FSALS[1]:
             old_rgw_fsal = cast(RGWFSAL, old_export.fsal)

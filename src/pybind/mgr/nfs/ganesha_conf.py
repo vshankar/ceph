@@ -113,14 +113,15 @@ class GaneshaConfParser:
                 value = self.stream()[:idx]
                 self.pos += idx + 1
             block_dict = RawBlock('%url', values={'value': value})
-            return block_dict
+            return ('%url', block_dict)
 
-        block_dict = RawBlock(self.parse_block_name().upper())
+        block_name = self.parse_block_name().upper()
+        block_dict = RawBlock(block_name)
         self.parse_block_body(block_dict)
         if self.stream()[0] != '}':
             raise Exception("No closing bracket '}' found at the end of block")
         self.pos += 1
-        return block_dict
+        return (block_name, block_dict)
 
     def parse_parameter_value(self, raw_value: str) -> Any:
         if raw_value.find(',') != -1:
@@ -164,7 +165,7 @@ class GaneshaConfParser:
                 self.parse_stanza(block_dict)
             elif is_lbracket and ((is_semicolon and not is_semicolon_lt_lbracket)
                                   or (not is_semicolon)):
-                block_dict.blocks.append(self.parse_block_or_section())
+                block_dict.blocks.append(self.parse_block_or_section()[1])
             else:
                 raise Exception("Malformed stanza: no semicolon found.")
 
@@ -172,9 +173,10 @@ class GaneshaConfParser:
                 raise Exception("Infinite loop while parsing block content")
 
     def parse(self) -> List[RawBlock]:
-        blocks = []
+        blocks = {}
         while self.stream():
-            blocks.append(self.parse_block_or_section())
+            (block_name, block) = self.parse_block_or_section()
+            blocks[block_name] = block
         return blocks
 
 
@@ -381,7 +383,7 @@ class CephBlock:
         return result
 
     @classmethod
-    def from_dict(cls, ex_dict: Dict[str, Any]) -> 'Export':
+    def from_dict(cls, ex_dict: Dict[str, Any]) -> 'CephBlock':
         return cls(ex_dict.get('async', False),
                    ex_dict.get('zerocopy', False))
 
@@ -394,6 +396,145 @@ class CephBlock:
 
     def __eq__(self, other: Any) -> bool:
         if not isinstance(other, CephBlock):
+            return False
+        return self.to_dict() == other.to_dict()
+
+class Facility:
+    def __init__(self,
+                 name: str,
+                 destination: str,
+                 enable: str):
+        self.name = name
+        self.destination = destination
+        self.enable = enable
+
+    @classmethod
+    def from_facility_block(cls, facility: RawBlock) -> 'Facility':
+        return cls(facility.values['name'],
+                   facility.values['destination'], facility.values['enable'])
+
+    def to_facility_block(self) -> RawBlock:
+        result = RawBlock("FACILITY", values={'name': self.name,
+                                              'destination': self.destination,
+                                              'enable': self.enable})
+        return result
+
+    @classmethod
+    def from_dict(cls, ex_dict: Dict[str, Any]) -> 'Facility':
+        return cls(ex_dict['name'], ex_dict['destination'], ex_dict['enable'])
+
+    def to_dict(self) -> Dict[str, Any]:
+        values = {
+            'name': self.name,
+            'destination': self.destination,
+            'enable': self.enable
+        }
+        return values
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, Facility):
+            return False
+        return self.to_dict() == other.to_dict()
+
+class Components:
+    def __init__(self,
+                 fsal: str,
+                 nfs4: str):
+        self.fsal = fsal
+        self.nfs4 = nfs4
+
+    @classmethod
+    def from_components_block(cls, components: RawBlock) -> 'Components':
+        return cls(components.values['fsal'], components.values['nfs4'])
+
+    def to_components_block(self) -> RawBlock:
+        result = RawBlock("COMPONENTS", values={'fsal': self.fsal, 'nfs4': self.nfs4})
+        return result
+
+    @classmethod
+    def from_dict(cls, ex_dict: Dict[str, Any]) -> 'Components':
+        return cls(ex_dict['fsal'], ex_dict['nfs4'])
+
+    def to_dict(self) -> Dict[str, Any]:
+        values = {
+            'fsal': self.fsal,
+            'nfs4': self.nfs4
+        }
+        return values
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, Components):
+            return False
+        return self.to_dict() == other.to_dict()
+
+class LogBlock:
+    def __init__(self,
+                 default_log_level: str,
+                 components: Components,
+                 facility: Facility):
+        self.default_log_level = default_log_level
+        self.components = components
+        self.facility = facility
+
+    @classmethod
+    def from_log_block(cls, log_block: RawBlock) -> 'LogBlock':
+        return cls(log_block.values.get('default_log_level', None),
+                   Components.from_components_block(self.components),
+                   Facility.from_facility_block(self.facility))
+
+    def to_log_block(self) -> RawBlock:
+        result = RawBlock("LOG", values={'default_log_level': self.default_log_level})
+        result.blocks = [
+            self.components.to_components_block()
+            ] + [
+                self.facility.to_facility_block()
+            ]
+        return result
+
+    @classmethod
+    def from_dict(cls, ex_dict: Dict[str, Any]) -> 'LogBlock':
+        return cls(ex_dict['default_log_level'],
+                   Components.from_dict(ex_dict['components']),
+                   Facility.from_dict(ex_dict['facility']))
+
+    def to_dict(self) -> Dict[str, Any]:
+        values = {
+            'default_log_level': self.default_log_level,
+            'components': self.components.to_dict(),
+            'facility': self.facility.to_dict()
+        }
+        return values
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, LogBlock):
+            return False
+        return self.to_dict() == other.to_dict()
+
+class NFSV4Block:
+    def __init__(self,
+                 delegations: bool):
+        self.delegations = delegations
+
+    @classmethod
+    def from_nfsv4_block(cls, nfsv4_block: RawBlock) -> 'NFSV4Block':
+        return cls(nfsv4_block.values.get('delegations', False))
+
+    def to_nfsv4_block(self) -> RawBlock:
+        result = RawBlock("NFSV4", values={'delegations': self.delegations})
+        return result
+
+    @classmethod
+    def from_dict(cls, ex_dict: Dict[str, Any]) -> 'NFSV4Block':
+        return cls(ex_dict['delegations'])
+
+    def to_dict(self) -> Dict[str, Any]:
+        values = {
+            'delegations': self.delegations
+        }
+        return values
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, NFSV4Block):
             return False
         return self.to_dict() == other.to_dict()
 
@@ -411,7 +552,8 @@ class Export:
             transports: List[str],
             fsal: FSAL,
             clients: Optional[List[Client]] = None,
-            sectype: Optional[List[str]] = None):
+            sectype: Optional[List[str]] = None,
+            delegations: Optional[str] = "none"):
         self.export_id = export_id
         self.path = path
         self.fsal = fsal
@@ -425,6 +567,7 @@ class Export:
         self.transports = transports
         self.clients: List[Client] = clients or []
         self.sectype = sectype
+        self.delegations = delegations
 
     @classmethod
     def from_export_block(cls, export_block: RawBlock, cluster_id: str) -> 'Export':
@@ -466,7 +609,8 @@ class Export:
                    FSAL.from_fsal_block(fsal_blocks[0]),
                    [Client.from_client_block(client)
                     for client in client_blocks],
-                   sectype=sectype)
+                   sectype=sectype,
+                   delegations=export_block.values.get("delegations", "none"))
 
     def to_export_block(self) -> RawBlock:
         values = {
@@ -479,6 +623,7 @@ class Export:
             'security_label': self.security_label,
             'protocols': self.protocols,
             'transports': self.transports,
+            'delegations': self.delegations
         }
         if self.sectype:
             values['SecType'] = self.sectype
@@ -504,7 +649,8 @@ class Export:
                    ex_dict.get('transports', ['TCP']),
                    FSAL.from_dict(ex_dict.get('fsal', {})),
                    [Client.from_dict(client) for client in ex_dict.get('clients', [])],
-                   sectype=ex_dict.get("sectype"))
+                   sectype=ex_dict.get("sectype"),
+                   delegations=ex_dict.get("delegations", "none"))
 
     def to_dict(self) -> Dict[str, Any]:
         values = {
@@ -518,7 +664,8 @@ class Export:
             'protocols': sorted([p for p in self.protocols]),
             'transports': sorted([t for t in self.transports]),
             'fsal': self.fsal.to_dict(),
-            'clients': [client.to_dict() for client in self.clients]
+            'clients': [client.to_dict() for client in self.clients],
+            "delegations": self.delegations
         }
         if self.sectype:
             values['sectype'] = self.sectype
@@ -564,6 +711,10 @@ class Export:
 
         for st in (self.sectype or []):
             _validate_sec_type(st)
+
+        valid_delegations = ["R", "RW", "NONE"]
+        if not self.delegations.upper() in valid_delegations:
+            raise NFSInvalidOperation(f'invalid delegations in export block: {self.delegations}')
 
     def __eq__(self, other: Any) -> bool:
         if not isinstance(other, Export):
