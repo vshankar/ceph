@@ -1190,10 +1190,12 @@ class CephFSMountBase(object):
             'python3', '-c', pyscript
         ])
 
-    def write_background(self, basename="background_file", loop=False):
+    def write_background(self, basename="background_file", loop=False, sleep_interval=2):
         """
         Open a file for writing, complete as soon as you can
-        :param basename:
+        :param basename: filename to create/write
+        :param loop: write till stdin is closed
+        :param sleep_interval: delay between write operations
         :return:
         """
         assert(self.is_mounted())
@@ -1220,11 +1222,11 @@ class CephFSMountBase(object):
                             break
                     except BlockingIOError:
                         pass
-                    time.sleep(2)
+                    time.sleep(sleep_interval)
             except IOError as e:
                 pass
             os.close(fd)
-            """).format(path=path, loop=str(loop))
+            """).format(path=path, loop=str(loop), delay=sleep_interval)
 
         rproc = self._run_python(pyscript)
         self.background_procs.append(rproc)
