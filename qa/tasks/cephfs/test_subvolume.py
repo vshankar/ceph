@@ -4,6 +4,7 @@ import os
 
 from tasks.cephfs.cephfs_test_case import CephFSTestCase
 from teuthology.exceptions import CommandFailedError
+from teuthology.contextutil import safe_while
 
 log = logging.getLogger(__name__)
 
@@ -243,15 +244,19 @@ class TestSubvolume(CephFSTestCase):
         suvolume_fs_path = os.path.join(mount_point, suvolume_fs_path.strip('/'))
 
         # do some writes
-        self.mount_a.run_shell(['sudo', 'fio', '--name', 'test', '-rw=write', '--bs=4k', '--numjobs=1', '--time_based',
-                                '--runtime=30s', '--verify=0', '--size=2G', f'--filename={os.path.join(suvolume_fs_path, "file0")}'])
+        filename = os.path.join(suvolume_fs_path, "file0")
+        proc = self.mount_a.run_shell_payload("sudo fio "
+                                              "--name test -rw=write "
+                                              "--bs=4k --numjobs=1 --time_based "
+                                              "--runtime=120s --verify=0 --size=5G "
+                                              f"--filename={filename}", wait=False)
 
-        # allow metrics to propagate
-        sleep(10)
+        with safe_while(sleep=1, tries=30, action=f'wait for subvolume write counters') as proceed:
+            # verify that metrics are available
+            subvol_metrics = self.get_subvolume_metrics()
+            if subvol_metrics:
+                return True
 
-        # verify that metrics are available
-        subvol_metrics = self.get_subvolume_metrics()
-        self.assertTrue(subvol_metrics, "Expected subvolume metrics to be reported after I/O")
         # Extract first metric entry
         metric = subvol_metrics[0]
         counters = metric["counters"]
@@ -274,12 +279,21 @@ class TestSubvolume(CephFSTestCase):
         self.assertGreater(counters["avg_write_tp_Bps"], 0, "Expected avg_write_tp_Bps to be > 0")
         self.assertGreater(counters["avg_write_lat_msec"], 0, "Expected avg_write_lat_msec to be > 0")
 
-        # do some reads
-        self.mount_a.run_shell(['sudo', 'fio', '--name', 'test', '-rw=read', '--bs=4k', '--numjobs=1', '--time_based',
-                                '--runtime=30s', '--verify=0', '--size=1G', f'--filename={os.path.join(suvolume_fs_path, "file0")}'])
+        proc.stdin.close()
+        proc.wait()
 
-        # allow metrics to propagate
-        sleep(5)
+        # do some reads
+        proc = self.mount_a.run_shell_payload("sudo fio "
+                                              "--name test -rw=read "
+                                              "--bs=4k --numjobs=1 --time_based "
+                                              "--runtime=120s --verify=0 --size=5G "
+                                              f"--filename={filename}", wait=False)
+
+        with safe_while(sleep=1, tries=30, action=f'wait for subvolume read counters') as proceed:
+            # verify that metrics are available
+            subvol_metrics = self.get_subvolume_metrics()
+            if subvol_metrics:
+                return True
         subvol_metrics = self.get_subvolume_metrics()
         metric = subvol_metrics[0]
         counters = metric["counters"]
@@ -289,8 +303,11 @@ class TestSubvolume(CephFSTestCase):
         self.assertGreater(counters["avg_read_tp_Bps"], 0, "Expected avg_read_tp_Bps to be >= 0")
         self.assertGreater(counters["avg_read_lat_msec"], 0, "Expected avg_read_lat_msec to be >= 0")
 
+        proc.stdin.close()
+        proc.wait()
+
         # wait for metrics to expire after inactivity
-        sleep(40)
+        sleep(60)
 
         # verify that metrics are not present anymore
         subvolume_metrics = self.get_subvolume_metrics()
