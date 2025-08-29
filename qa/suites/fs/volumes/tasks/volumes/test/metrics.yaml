@@ -1,7 +1,3 @@
-teuthology:
-  premerge: |
-            if not is_fuse() then reject() end
-
 overrides:
   install:
     extra_system_packages:
