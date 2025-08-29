@@ -222,6 +222,45 @@ class TestSubvolume(CephFSTestCase):
         # cleanup
         self.mount_a.run_shell(['rm', '-rf', 'group/subvol3'])
 
+class TestSubvolumeReplicated(CephFSTestCase):
+    CLIENTS_REQUIRED = 1
+    MDSS_REQUIRED = 2
+
+    def test_subvolume_replicated(self):
+        """
+        That a replica sees the subvolume flag on a directory.
+        """
+
+
+        self.mount_a.run_shell_payload("mkdir -p dir1/dir2/dir3/dir4")
+
+        self.fs.set_max_mds(2)
+        status = self.fs.wait_for_daemons()
+
+        self.mount_a.setfattr("dir1", "ceph.dir.pin", "1")
+        self.mount_a.setfattr("dir1/dir2/dir3", "ceph.dir.pin", "0") # force dir2 to be replicated
+        status = self._wait_subtrees([("/dir1", 1), ("/dir1/dir2/dir3", 0)], status=status, rank=1)
+
+        op = self.fs.rank_tell("lock", "path", "/dir1/dir2", "snap:r", rank=1)
+        p = self.mount_a.setfattr("dir1/dir2", "ceph.dir.subvolume", "1", wait=False)
+        sleep(2)
+        reqid = self._reqid_tostr(op['reqid'])
+        self.fs.kill_op(reqid, rank=1)
+        p.wait()
+
+        ino1 = self.fs.read_cache("/dir1/dir2", depth=0, rank=1)[0]
+        self.assertTrue(ino1['is_subvolume'])
+        self.assertTrue(ino1['is_auth'])
+        replicas = ino1['auth_state']['replicas']
+        self.assertIn("0", replicas)
+
+        ino0 = self.fs.read_cache("/dir1/dir2", depth=0, rank=0)[0]
+        self.assertFalse(ino0['is_auth'])
+        self.assertTrue(ino0['is_subvolume'])
+
+class TestSubvolumeMetrics(CephFSTestCase):
+    CLIENTS_REQUIRED = 1
+    MDSS_REQUIRED = 1
 
     def test_subvolume_metrics_lifecycle(self):
         """
@@ -312,40 +351,3 @@ class TestSubvolume(CephFSTestCase):
         # verify that metrics are not present anymore
         subvolume_metrics = self.get_subvolume_metrics()
         self.assertFalse(subvolume_metrics, "Subvolume metrics should be gone after inactivity window")
-
-
-class TestSubvolumeReplicated(CephFSTestCase):
-    CLIENTS_REQUIRED = 1
-    MDSS_REQUIRED = 2
-
-    def test_subvolume_replicated(self):
-        """
-        That a replica sees the subvolume flag on a directory.
-        """
-
-
-        self.mount_a.run_shell_payload("mkdir -p dir1/dir2/dir3/dir4")
-
-        self.fs.set_max_mds(2)
-        status = self.fs.wait_for_daemons()
-
-        self.mount_a.setfattr("dir1", "ceph.dir.pin", "1")
-        self.mount_a.setfattr("dir1/dir2/dir3", "ceph.dir.pin", "0") # force dir2 to be replicated
-        status = self._wait_subtrees([("/dir1", 1), ("/dir1/dir2/dir3", 0)], status=status, rank=1)
-
-        op = self.fs.rank_tell("lock", "path", "/dir1/dir2", "snap:r", rank=1)
-        p = self.mount_a.setfattr("dir1/dir2", "ceph.dir.subvolume", "1", wait=False)
-        sleep(2)
-        reqid = self._reqid_tostr(op['reqid'])
-        self.fs.kill_op(reqid, rank=1)
-        p.wait()
-
-        ino1 = self.fs.read_cache("/dir1/dir2", depth=0, rank=1)[0]
-        self.assertTrue(ino1['is_subvolume'])
-        self.assertTrue(ino1['is_auth'])
-        replicas = ino1['auth_state']['replicas']
-        self.assertIn("0", replicas)
-
-        ino0 = self.fs.read_cache("/dir1/dir2", depth=0, rank=0)[0]
-        self.assertFalse(ino0['is_auth'])
-        self.assertTrue(ino0['is_subvolume'])
