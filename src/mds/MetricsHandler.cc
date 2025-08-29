@@ -323,21 +323,20 @@ void MetricsHandler::handle_payload(Session *session, const WriteIoSizesPayload 
 
 void MetricsHandler::handle_payload(Session *session, const SubvolumeMetricsPayload &payload) {
   dout(20) << ": type=" << payload.get_type() << ", session=" << session
-  << " , subv_metrics count=" << payload.subvolume_metrics.size() << dendl;
-
-  auto it = client_metrics_map.find(session->info.inst);
-  if (it == client_metrics_map.end()) {
-    return;
-  }
+	   << " , subv_metrics count=" << payload.subvolume_metrics.size() << dendl;
 
   // on each mds we accumulate aggregated metrics from each client per each subvolume
   // to be later send to the metrics handler for aggregation
   for (auto const& metric : payload.subvolume_metrics) {
+    // FIXME: this is unsafe to call without mds_lock held - use subvolume-id
+    // as the path string (for now).
+    /*
     std::string path = mds->get_path(metric.subvolume_id);
     if (path.empty()) {
       dout(10) << " path not found for " << metric.subvolume_id << dendl;
       continue;
-    }
+      } */
+    std::string path = stringify(metric.subvolume_id);
     auto& metrics_vec = subvolume_metrics_map[path];
     dout(20) << " accumulating subv_metric " << metric << dendl;
     metrics_vec.push_back(std::move(metric));
@@ -448,7 +447,8 @@ void MetricsHandler::update_rank0() {
     ++last_updated_seq;
   }
 
-  dout(20) << "sending " << metrics_message.subvolume_metrics.size() << " subv_metrics to aggregator" << dendl;
+  dout(20) << ": sending " << metrics_message.subvolume_metrics.size() << " subv_metrics to aggregator"
+	   << dendl;
 
   mds->send_message_mds(make_message<MMDSMetrics>(std::move(metrics_message)), *addr_rank0);
 }
