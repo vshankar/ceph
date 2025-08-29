@@ -33,15 +33,6 @@ class TestSubvolume(CephFSTestCase):
     def cleanup_test(self):
         self.mount_a.run_shell(['rm', '-rf', 'group'])
 
-    def get_subvolume_metrics(self, mds_rank=0):
-        """
-        Helper to fetch current subvolume metrics from MDS counters using rank_tell.
-        """
-        mds_info = self.fs.get_rank(rank=mds_rank)
-        mds_name = mds_info['name']
-        counters = self.fs.mds_tell(["counter", "dump"], mds_id=mds_name)
-        return counters.get("mds_subvolume_metrics")
-
     def test_subvolume_move_out_file(self):
         """
         To verify that file can't be moved out of subvolume
@@ -261,6 +252,15 @@ class TestSubvolumeReplicated(CephFSTestCase):
 class TestSubvolumeMetrics(CephFSTestCase):
     CLIENTS_REQUIRED = 1
     MDSS_REQUIRED = 1
+
+    def get_subvolume_metrics(self, mds_rank=0):
+        """
+        Helper to fetch current subvolume metrics from MDS counters using rank_tell.
+        """
+        mds_info = self.fs.get_rank(rank=mds_rank)
+        mds_name = mds_info['name']
+        counters = self.fs.mds_tell(["counter", "dump"], mds_id=mds_name)
+        return counters.get("mds_subvolume_metrics")
 
     def test_subvolume_metrics_lifecycle(self):
         """
