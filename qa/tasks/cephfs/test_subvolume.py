@@ -287,8 +287,8 @@ class TestSubvolumeMetrics(CephFSTestCase):
         proc = self.mount_a.run_shell_payload("sudo fio "
                                               "--name test -rw=write "
                                               "--bs=4k --numjobs=1 --time_based "
-                                              "--runtime=60s --verify=0 --size=5G "
-                                              f"--filename={filename}", wait=False)
+                                              "--runtime=20s --verify=0 --size=1G "
+                                              f"--filename={filename}", wait=True)
 
         subvol_metrics = None
         with safe_while(sleep=1, tries=30, action=f'wait for subvolume write counters') as proceed:
@@ -328,8 +328,8 @@ class TestSubvolumeMetrics(CephFSTestCase):
         proc = self.mount_a.run_shell_payload("sudo fio "
                                               "--name test -rw=read "
                                               "--bs=4k --numjobs=1 --time_based "
-                                              "--runtime=60s --verify=0 --size=5G "
-                                              f"--filename={filename}", wait=False)
+                                              "--runtime=20s --verify=0 --size=1G "
+                                              f"--filename={filename}", wait=True)
 
         subvol_metrics = None
         with safe_while(sleep=1, tries=30, action=f'wait for subvolume read counters') as proceed:
