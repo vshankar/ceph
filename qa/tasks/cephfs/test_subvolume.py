@@ -284,11 +284,11 @@ class TestSubvolumeMetrics(CephFSTestCase):
 
         # do some writes
         filename = os.path.join(suvolume_fs_path, "file0")
-        proc = self.mount_a.run_shell_payload("sudo fio "
-                                              "--name test -rw=write "
-                                              "--bs=4k --numjobs=1 --time_based "
-                                              "--runtime=20s --verify=0 --size=1G "
-                                              f"--filename={filename}", wait=True)
+        self.mount_a.run_shell_payload("sudo fio "
+                                       "--name test -rw=write "
+                                       "--bs=4k --numjobs=1 --time_based "
+                                       "--runtime=20s --verify=0 --size=1G "
+                                       f"--filename={filename}", wait=True)
 
         subvol_metrics = None
         with safe_while(sleep=1, tries=30, action=f'wait for subvolume write counters') as proceed:
@@ -322,14 +322,12 @@ class TestSubvolumeMetrics(CephFSTestCase):
         self.assertGreater(counters["avg_write_tp_Bps"], 0, "Expected avg_write_tp_Bps to be > 0")
         self.assertGreaterEqual(counters["avg_write_lat_msec"], 0, "Expected avg_write_lat_msec to be > 0")
 
-        proc.wait()
-
         # do some reads
-        proc = self.mount_a.run_shell_payload("sudo fio "
-                                              "--name test -rw=read "
-                                              "--bs=4k --numjobs=1 --time_based "
-                                              "--runtime=20s --verify=0 --size=1G "
-                                              f"--filename={filename}", wait=True)
+        self.mount_a.run_shell_payload("sudo fio "
+                                       "--name test -rw=read "
+                                       "--bs=4k --numjobs=1 --time_based "
+                                       "--runtime=20s --verify=0 --size=1G "
+                                       f"--filename={filename}", wait=True)
 
         subvol_metrics = None
         with safe_while(sleep=1, tries=30, action=f'wait for subvolume read counters') as proceed:
@@ -348,8 +346,6 @@ class TestSubvolumeMetrics(CephFSTestCase):
         self.assertGreater(counters["avg_read_iops"], 0, "Expected avg_read_iops to be >= 0")
         self.assertGreater(counters["avg_read_tp_Bps"], 0, "Expected avg_read_tp_Bps to be >= 0")
         self.assertGreaterEqual(counters["avg_read_lat_msec"], 0, "Expected avg_read_lat_msec to be >= 0")
-
-        proc.wait()
 
         # wait for metrics to expire after inactivity
         sleep(60)
