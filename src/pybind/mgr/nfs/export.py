@@ -430,6 +430,7 @@ class ExportMgr:
             }]
             kwargs['squash'] = 'none'
         kwargs['clients'] = clients
+        log.debug(f'clients: {clients}')
 
         if clients:
             kwargs['access_type'] = "none"
@@ -770,6 +771,7 @@ class ExportMgr:
                 earmark_resolver
             )
             log.debug("creating cephfs export %s", export)
+            log.debug(f'access_type: {access_type}')
             self._ensure_cephfs_export_user(export)
             self._save_export(cluster_id, export)
             result = {
