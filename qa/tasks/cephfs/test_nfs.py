@@ -1233,6 +1233,36 @@ class TestNFS(MgrTestCase):
             self._delete_cluster_with_fs(self.fs_name, mnt_pt)
             self.ctx.cluster.run(args=['rm', '-rf', f'{mnt_pt}'])
 
+    def test_nfs_export_apply_without_access_type(self):
+        mnt_pt = self._sys_cmd(['mktemp', '-d']).decode().strip()
+        self._create_cluster_with_fs(self.fs_name, mnt_pt)
+        try:
+            self.ctx.cluster.run(args=['mkdir', f'{mnt_pt}/testdir1'])
+            self._create_export(export_id='1',
+                                extra_cmd=['--pseudo-path', self.pseudo_path,
+                                           '--path', '/testdir1'])
+            export_output = self._get_export()
+            print(f'export info before: {export_output}')
+            export = {
+                "export_id": 1,
+                "path": "/testdir1",
+                "pseudo": self.pseudo_path,
+                "squash": "none",
+                "protocols": [4],
+                "fsal": {
+                    "name": "CEPH",
+                    "user_id": "nfs.test.nfs-cephfs.3746f603",
+                    "fs_name": self.fs_name
+                }
+            }
+            ret = self._nfs_export_apply(self.cluster_id, export)
+            self.assertEqual(ret[0].returncode, 0)
+            export_output = self._get_export()
+            print(f'export info after: {export_output}')
+        finally:
+            self._delete_cluster_with_fs(self.fs_name, mnt_pt)
+            self.ctx.cluster.run(args=['rm', '-rf', f'{mnt_pt}'])
+
     def test_nfs_export_apply_json_output_states(self):
         """
         If export creation/update is done using:

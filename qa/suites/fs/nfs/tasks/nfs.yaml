@@ -8,4 +8,4 @@ overrides:
 tasks:
   - cephfs_test_runner:
       modules:
-        - tasks.cephfs.test_nfs
+        - tasks.cephfs.test_nfs.TestNFS.test_nfs_export_apply_without_access_type
