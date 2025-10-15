@@ -400,10 +400,10 @@ class CephBlock:
         return self.to_dict() == other.to_dict()
 
 class Facility:
-    def __init(self,
-               name: str,
-               destination: str,
-               enable: str):
+    def __init__(self,
+                 name: str,
+                 destination: str,
+                 enable: str):
         self.name = name
         self.destination = destination
         self.enable = enable
@@ -437,28 +437,28 @@ class Facility:
         return self.to_dict() == other.to_dict()
 
 class Components:
-    def __init(self,
-               fsal: str,
-               nfsv4: str):
+    def __init__(self,
+                 fsal: str,
+                 nfs4: str):
         self.fsal = fsal
-        self.nfsv4 = nfsv4
+        self.nfs4 = nfs4
 
     @classmethod
     def from_components_block(cls, components: RawBlock) -> 'Components':
-        return cls(components.values['fsal'], components.values['nfsv4'])
+        return cls(components.values['fsal'], components.values['nfs4'])
 
     def to_components_block(self) -> RawBlock:
-        result = RawBlock("COMPONENTS", values={'fsal': self.fsal, 'nfsv4': self.nfsv4})
+        result = RawBlock("COMPONENTS", values={'fsal': self.fsal, 'nfs4': self.nfs4})
         return result
 
     @classmethod
     def from_dict(cls, ex_dict: Dict[str, Any]) -> 'Components':
-        return cls(ex_dict['fsal'], ex_dict['nfsv4'])
+        return cls(ex_dict['fsal'], ex_dict['nfs4'])
 
     def to_dict(self) -> Dict[str, Any]:
         values = {
             'fsal': self.fsal,
-            'nfsv4': self.nfsv4
+            'nfs4': self.nfs4
         }
         return values
 
@@ -495,7 +495,7 @@ class LogBlock:
     def from_dict(cls, ex_dict: Dict[str, Any]) -> 'LogBlock':
         return cls(ex_dict['default_log_level'],
                    Components.from_dict(ex_dict['components']),
-                   Facility.fron_dict(ex_dict['facility']))
+                   Facility.from_dict(ex_dict['facility']))
 
     def to_dict(self) -> Dict[str, Any]:
         values = {
