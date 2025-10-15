@@ -78,7 +78,7 @@ class GaneshaClient(Task):
                 cluster_info = json.loads(res)
                 log.debug(f'cluster_info: {cluster_info}')
 
-                info_output = cluster_info[cluster_id]['sufsend'][0]
+                info_output = cluster_info[cluster_id]['backend'][0]
                 port = info_output['port']
                 ip = info_output['ip']
 
