@@ -39,7 +39,8 @@ tasks:
                       "fs_name": "cephfs",
                       "cmount_path": "/"
                   },
-                  "clients": []
+                  "clients": [],
+                  "delegations": "R"
               },
               "log": {
                   "default_log_level": "WARN",

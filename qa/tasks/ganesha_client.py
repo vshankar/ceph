@@ -62,39 +62,36 @@ class GaneshaClient(Task):
             pseudo_path = client_config['pseudo_path']
             nfs_version = client_config.get('version', 'latest')
 
-            try:
-                first_mon = misc.get_first_mon(self.ctx, None)
-                (mon0_remote,) = self.ctx.cluster.only(first_mon).remotes.keys()
+            first_mon = misc.get_first_mon(self.ctx, None)
+            (mon0_remote,) = self.ctx.cluster.only(first_mon).remotes.keys()
 
-                proc = mon0_remote.run(args=['ceph', 'nfs', 'export', 'info', cluster_id, pseudo_path],
-                                       stdout=StringIO(), wait=True)
-                res = proc.stdout.getvalue()
-                export_json = json.loads(res)
-                log.debug(f'export_json: {export_json}')
+            proc = mon0_remote.run(args=['ceph', 'nfs', 'export', 'info', cluster_id, pseudo_path],
+                                   stdout=StringIO(), wait=True)
+            res = proc.stdout.getvalue()
+            export_json = json.loads(res)
+            log.debug(f'export_json: {export_json}')
 
-                proc = mon0_remote.run(args=['ceph', 'nfs', 'cluster', 'info', cluster_id],
-                                       stdout=StringIO(), wait=True)
-                res = proc.stdout.getvalue()
-                cluster_info = json.loads(res)
-                log.debug(f'cluster_info: {cluster_info}')
+            proc = mon0_remote.run(args=['ceph', 'nfs', 'cluster', 'info', cluster_id],
+                                   stdout=StringIO(), wait=True)
+            res = proc.stdout.getvalue()
+            cluster_info = json.loads(res)
+            log.debug(f'cluster_info: {cluster_info}')
 
-                info_output = cluster_info[cluster_id]['backend'][0]
-                port = info_output['port']
-                ip = info_output['ip']
+            info_output = cluster_info[cluster_id]['backend'][0]
+            port = info_output['port']
+            ip = info_output['ip']
 
-                mntpt = os.path.join(test_dir, f'mnt.{id_}')
-                remote.run(args=['mkdir', '-p', mntpt], timeout=60)
-                if nfs_version == 'latest':
-                    remote.run(args=['sudo', 'mount', '-t', 'nfs', '-o',
-                                     f'port={port}', f'{ip}:{pseudo_path}', mntpt])
-                else:
-                    remote.run(args=['sudo', 'mount', '-t', 'nfs', '-o',
-                                     f'port={port},vers={nfs_version}', f'{ip}:{pseudo_path}', mntpt])
-                remote.run(args=['sudo', 'chmod', '1777', mntpt], timeout=60)
-                remote.run(args=['stat', mntpt])
-                mounts[id_] = (remote, mntpt)
-            except Exception as e:
-                log.error(f'failed: {e}')
+            mntpt = os.path.join(test_dir, f'mnt.{id_}')
+            remote.run(args=['mkdir', '-p', mntpt], timeout=60)
+            if nfs_version == 'latest':
+                remote.run(args=['sudo', 'mount', '-t', 'nfs', '-o',
+                                 f'port={port}', f'{ip}:{pseudo_path}', mntpt])
+            else:
+                remote.run(args=['sudo', 'mount', '-t', 'nfs', '-o',
+                                 f'port={port},vers={nfs_version}', f'{ip}:{pseudo_path}', mntpt])
+            remote.run(args=['sudo', 'chmod', '1777', mntpt], timeout=60)
+            remote.run(args=['stat', mntpt])
+            mounts[id_] = (remote, mntpt)
         self.mounts = mounts
 
     def end(self):
