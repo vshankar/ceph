@@ -32,44 +32,42 @@ class GaneshaReconf(Task):
         deep_merge(ganesha_config, overrides)
         log.info(f'ganesha_config is {ganesha_config}')
 
-        try:
-            first_mon = misc.get_first_mon(self.ctx, None)
-            (mon0_remote,) = self.ctx.cluster.only(first_mon).remotes.keys()
+        first_mon = misc.get_first_mon(self.ctx, None)
+        (mon0_remote,) = self.ctx.cluster.only(first_mon).remotes.keys()
 
-            cluster_id = ganesha_config['cluster_id']
-            pseudo_path = ganesha_config['pseudo_path']
+        cluster_id = ganesha_config['cluster_id']
+        pseudo_path = ganesha_config['pseudo_path']
 
-            proc = mon0_remote.run(args=['ceph', 'nfs', 'export', 'info', cluster_id, pseudo_path],
-                                   stdout=StringIO(), wait=True)
-            res = proc.stdout.getvalue()
-            export_json = json.loads(res)
-            log.debug(f'export_json: {export_json}')
+        proc = mon0_remote.run(args=['ceph', 'nfs', 'export', 'info', cluster_id, pseudo_path],
+                               stdout=StringIO(), wait=True)
+        res = proc.stdout.getvalue()
+        export_json = json.loads(res)
+        log.debug(f'export_json: {export_json}')
 
-            ceph_section = {'async': False, 'zerocopy': False}
-            is_async = ganesha_config.get('async', False)
-            if is_async:
-                ceph_section["async"] = True
-            is_zerocopy = ganesha_config.get('zerocopy', False)
-            if is_zerocopy:
-                ceph_section["zerocopy"] = True
+        ceph_section = {'async': False, 'zerocopy': False}
+        is_async = ganesha_config.get('async', False)
+        if is_async:
+            ceph_section["async"] = True
+        is_zerocopy = ganesha_config.get('zerocopy', False)
+        if is_zerocopy:
+            ceph_section["zerocopy"] = True
 
-            nfsv4_block = {}
-            delegations = ganesha_config.get('delegations', 'none')
-            export_json['delegations'] = delegations
-            nfsv4_block['delegations'] = False if delegations == 'none' else True
+        nfsv4_block = {}
+        delegations = ganesha_config.get('delegations', 'none')
+        nfsv4_block['delegations'] = False if delegations == 'none' else True
 
-            new_export = {}
-            if "export" in export_json.keys():
-                new_export = export_json
-            else:
-                new_export["export"] = export_json
-            new_export["ceph"] = ceph_section
+        new_export = {}
+        if "export" in export_json.keys():
+            new_export = export_json
+        else:
+            new_export["export"] = export_json
+        new_export["ceph"] = ceph_section
+        new_export["nfsv4"] = nfsv4_block
+        new_export["export"]["delegations"] = delegations
 
-            log.debug(f'new_export is {json.dumps(new_export)}')
-            mon0_remote.run(args=['ceph', 'nfs', 'export', 'apply', cluster_id, "-i", "-"],
-                            stdin=json.dumps(new_export))
-        except Exception as e:
-                log.error(f'failed: {e}')
+        log.debug(f'new_export is {json.dumps(new_export)}')
+        mon0_remote.run(args=['ceph', 'nfs', 'export', 'apply', cluster_id, "-i", "-"],
+                        stdin=json.dumps(new_export))
 
     def end(self):
         super(GaneshaReconf, self).end()
