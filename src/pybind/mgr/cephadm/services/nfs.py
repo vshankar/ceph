@@ -214,7 +214,8 @@ class NFSService(CephService):
                 self.get_config_and_keyring(
                     daemon_type, daemon_id,
                     keyring=rados_keyring,
-                    host=host
+                    host=host,
+                    extra_ceph_config="\n\tdebug_client=20\n"
                 )
             )
             config['rgw'] = {
