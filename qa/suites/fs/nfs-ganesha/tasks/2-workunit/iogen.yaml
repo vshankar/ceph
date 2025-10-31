@@ -1,0 +1,6 @@
+tasks:
+- workunit:
+    timeout: 1h
+    clients:
+      client.0:
+        - suites/iogen.sh
