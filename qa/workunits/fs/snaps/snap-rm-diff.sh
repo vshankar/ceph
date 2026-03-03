@@ -1,5 +1,8 @@
 #!/bin/sh -ex
 
+mount
+stat /home/ubuntu/cephtest/mnt*
+
 wget -q http://download.ceph.com/qa/linux-2.6.33.tar.bz2
 mkdir foo
 cp linux* foo
