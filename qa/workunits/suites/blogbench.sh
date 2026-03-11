@@ -8,7 +8,7 @@ tar -xvf blogbench-1.0.tar.bz2
 cd blogbench-1.0/
 echo "making blogbench"
 ./configure
-make
+CFLAGS="-Wno-error=implicit-function-declaration" make
 cd src
 mkdir blogtest_in
 echo "running blogbench"
