@@ -1,16 +1,22 @@
 teuthology:
   postmerge:
-  - local function is_kupstream()
-      return false
-    end
-  - local function is_kdistro()
-      return false
-    end
-  - local function is_fuse()
-      return true
-    end
-  - local function syntax_version()
-      return ''
-    end
+    - |
+      log.debug("yaml %s", yaml)
+      if yaml.os_type == "rocky" and base_config.kernel == "testing" then
+        log.debug("not testing on rocky: https://tracker.ceph.com/issues/74907")
+        reject()
+      end
+      local function is_kupstream()
+        return false
+      end
+      local function is_kdistro()
+        return false
+      end
+      local function is_fuse()
+        return true
+      end
+      local function syntax_version()
+        return ''
+      end
 tasks:
   - ceph-fuse:
