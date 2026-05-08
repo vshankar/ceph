@@ -482,45 +482,46 @@ int JournalTool::main_event(std::vector<const char*> &argv)
       return r;
     }
   } else if (command == "recover_dentries") {
-    r = js.scan();
-    if (r) {
+    std::set<inodeno_t> consumed_inos;
+    progress_tracker->set_operation_name("Processing events");
+    
+    // decode the journal first to check if the header is valid
+    r = js.scan(false);
+    if (r < 0) {
       derr << "Failed to scan journal (" << cpp_strerror(r) << ")" << dendl;
       return r;
     }
+    if (!js.header_present || !js.header_valid) {
+      derr << "Journal header is not present or is damaged, cannot recover dentries" << dendl;
+      return -EIO;
+    }
 
-    /**
-     * Iterate over log entries, attempting to scavenge from each one
-     */
-    std::set<inodeno_t> consumed_inos;
-    uint64_t event_count = js.events.size();
-    progress_tracker->set_operation_name("Processing events");
-    progress_tracker->start(event_count);
+    // start the progress tracker with the diff b/w write and expire position
+    progress_tracker->start(js.header->write_pos - js.header->expire_pos);
 
-
-    for (JournalScanner::EventMap::iterator i = js.events.begin();
-         i != js.events.end(); ++i) {
-      auto& le = i->second.log_event;
+    r = js.scan_events([&](uint64_t offset, JournalScanner::EventRecord& er) {
+      auto& le = er.log_event;
       EMetaBlob const *mb = le->get_metablob();
       if (mb) {
         int scav_r = recover_dentries(*mb, dry_run, &consumed_inos);
         if (scav_r) {
-          dout(1) << "Error processing event 0x" << std::hex << i->first << std::dec
+          dout(1) << "Error processing event 0x" << std::hex << offset << std::dec
                   << ": " << cpp_strerror(scav_r) << ", continuing..." << dendl;
-          if (r == 0) {
-            r = scav_r;
-          }
-          // Our goal is to read all we can, so don't stop on errors, but
-          // do record them for possible later output
-          js.errors.insert(std::make_pair(i->first,
-                JournalScanner::EventError(scav_r, cpp_strerror(r))));
+          js.errors.insert(std::make_pair(offset,
+                JournalScanner::EventError(scav_r, cpp_strerror(scav_r))));
         }
       }
 
       progress_tracker->increment();
       progress_tracker->display_progress();
+    });
+
+    if (r) {
+      derr << "Failed to scan events (" << cpp_strerror(r) << ")" << dendl;
+      return r;
     }
 
-      progress_tracker->display_final_summary();
+    progress_tracker->display_final_summary();
 
 
     /**
