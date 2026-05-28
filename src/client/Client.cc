@@ -3793,6 +3793,7 @@ void Client::unlink(Dentry *dn, bool keepdir, bool keepdentry)
   InodeRef in(dn->inode);
   ldout(cct, 15) << "unlink dir " << dn->dir->parent_inode << " '" << dn->name << "' dn " << dn
 		 << " inode " << dn->inode << dendl;
+  ldout(cct, 10) << __func__ << " *dn=" << dn << dendl;
 
   // unlink from inode
   if (dn->inode) {
@@ -3801,6 +3802,7 @@ void Client::unlink(Dentry *dn, bool keepdir, bool keepdentry)
     ldout(cct, 20) << "unlink  inode " << in << " parents now " << in->dentries << dendl;
   }
 
+  ldout(cct, 10) << __func__ << " *dn=" << dn << dendl;
   ceph_assert(dn->ref > 0);
 
   if (keepdentry) {
