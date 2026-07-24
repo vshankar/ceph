@@ -5,7 +5,7 @@ tasks:
       - set -x
       - cd $TESTDIR
       - sudo apt purge -y mpich
-      - sudo apt install -y mpich
+      - sudo apt install -y mpich=4.0-3
       # use ior project instead of mdtest project because latter has been
       # merged into former. See:
       # https://github.com/MDTEST-LANL/mdtest/blob/master/README.md
