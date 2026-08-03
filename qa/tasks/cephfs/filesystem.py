@@ -662,6 +662,9 @@ class FilesystemBase(MDSClusterBase):
     def set_allow_standby_replay(self, yes):
         self.set_var("allow_standby_replay", yes)
 
+    def set_allow_standby_replay_host_anti_affinity(self, val):
+        self.set_var("standby_enable_host_anti_affinity", val)
+
     def set_allow_new_snaps(self, yes):
         self.set_var("allow_new_snaps", yes, '--yes-i-really-mean-it')
 
@@ -813,6 +816,10 @@ class FilesystemBase(MDSClusterBase):
 
             standby_replay = self.fs_config.get('standby_replay', False)
             self.set_allow_standby_replay(standby_replay)
+
+            # standby-replay host anti affinity?
+            host_anti_affinity = self.fs_config.get('host_anti_affinity', False)
+            self.set_allow_standby_replay_host_anti_affinity(host_anti_affinity)
 
             # If absent will use the default value (60 seconds)
             session_timeout = self.fs_config.get('session_timeout', 60)
