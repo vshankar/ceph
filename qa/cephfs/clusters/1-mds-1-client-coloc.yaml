@@ -6,4 +6,4 @@ openstack:
     count: 4
     size: 20 # GB
 - machine:
-    disk: 200 # GB
+    disk: 500 # GB
