@@ -818,8 +818,8 @@ class FilesystemBase(MDSClusterBase):
             self.set_allow_standby_replay(standby_replay)
 
             # standby host anti affinity?
-            if 'host_anti_affinity' in self.fs_config:
-                self.set_standby_enable_host_anti_affinity(self.fs_config['host_anti_affinity'])
+            if 'standby_enable_host_anti_affinity' in self.fs_config:
+                self.set_standby_enable_host_anti_affinity(self.fs_config['standby_enable_host_anti_affinity'])
 
             # If absent will use the default value (60 seconds)
             session_timeout = self.fs_config.get('session_timeout', 60)

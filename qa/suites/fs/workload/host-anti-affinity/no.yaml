@@ -1,4 +1,4 @@
 overrides:
   ceph:
     cephfs:
-      host_anti_affinity: false
+      standby_enable_host_anti_affinity: false

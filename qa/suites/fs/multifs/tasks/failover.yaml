@@ -1,5 +1,7 @@
 overrides:
   ceph:
+    cephfs:
+      standby_enable_host_anti_affinity: false
     log-ignorelist:
       - Replacing daemon mds
       - \(MDS_INSUFFICIENT_STANDBY\)
