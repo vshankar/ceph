@@ -103,7 +103,7 @@
     "ngx-toastr": "14.1.4",
     "rxjs": "6.6.3",
     "simplebar-angular": "2.3.6",
-    "swagger-ui": "4.4.1",
+    "swagger-ui": "5.32.14",
     "tslib": "2.3.1"
   },
   "devDependencies": {
@@ -121,7 +121,7 @@
     "@types/lodash": "4.14.161",
     "@types/node": "12.12.62",
     "@types/simplebar": "5.1.1",
-    "@types/swagger-ui": "3.52.0",
+    "@types/swagger-ui": "5.32.0",
     "codelyzer": "6.0.2",
     "cypress": "9.0.0",
     "cypress-cucumber-preprocessor": "4.3.1",
