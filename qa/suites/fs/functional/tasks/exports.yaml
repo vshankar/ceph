@@ -4,6 +4,7 @@ overrides:
       - Replacing daemon mds
 tasks:
 - cephfs_test_runner:
+    failfast: false
     fail_on_skip: false
     modules:
       - tasks.cephfs.test_exports
