@@ -193,11 +193,12 @@ def task(ctx, config):
                 super(LoggingResult, self).addSkip(test, reason)
 
     # Execute!
+    failfast = config.get('failfast', True) if config else True
     result = unittest.TextTestRunner(
         stream=LogStream(),
         resultclass=LoggingResult,
         verbosity=2,
-        failfast=True).run(overall_suite)
+        failfast=failfast).run(overall_suite)
 
     if not result.wasSuccessful():
         result.printErrors()  # duplicate output at end for convenience
