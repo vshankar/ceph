@@ -49,6 +49,20 @@
   to throttle client metadata requests (e.g., create, mkdir, lookup, and so on) to
   subvolumes, where each subvolume QoS is shared among multiple client sessions at
   that time.
+
+* CephFS: Subvolume QoS can now be configured through mgr/volumes and is
+  persistent. Use ``ceph fs subvolume qos set <vol_name> <subvol_name>
+  <reservation> <weight> <limit> [--group_name <group_name>]`` to set it, and
+  ``ceph fs subvolume qos get|rm`` to inspect or remove it. The equivalent
+  ``ceph fs subvolumegroup qos set|get|rm`` commands configure a subvolume
+  group, whose settings are inherited by every subvolume in the group that does
+  not set its own. The parameters are stored by the MDS in the subvolume (or
+  subvolume group) root directory inode, so unlike the ``qos set`` command
+  available over the MDS admin socket they survive MDS restart and failover and
+  are re-applied without any further action. The admin socket ``qos set`` and
+  ``qos rm`` commands remain available as a transient, rank local override that
+  suppresses the persistent setting until dropped with ``qos rm``.
+
 * MON: Each monitor now reports four new perf counters covering its data
   directory: ``data_disk_total_bytes``, ``data_disk_avail_bytes``,
   ``data_disk_avail_percent``, and ``db_total_bytes`` (estimated on-disk size

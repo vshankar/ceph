@@ -351,6 +351,40 @@ List snapshots of a subvolume group by running a command of the following form:
    ceph fs subvolumegroup snapshot ls <vol_name> <group_name>
 
 
+Setting QoS on a Subvolume Group
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+QoS parameters may also be set on a subvolume group, in which case they are
+inherited by every subvolume in the group that does not set its own. The
+parameters have the same meaning as for a subvolume; see
+:ref:`fs-volumes-qos`.
+
+Set the QoS parameters of a subvolume group by running a command of the
+following form:
+
+.. prompt:: bash #
+
+   ceph fs subvolumegroup qos set <vol_name> <group_name> <reservation> <weight> <limit>
+
+Get the QoS parameters of a subvolume group by running a command of the
+following form:
+
+.. prompt:: bash #
+
+   ceph fs subvolumegroup qos get <vol_name> <group_name>
+
+Remove the QoS parameters from a subvolume group by running a command of the
+following form:
+
+.. prompt:: bash #
+
+   ceph fs subvolumegroup qos rm <vol_name> <group_name>
+
+.. note:: A subvolume group's QoS acts as a default for each subvolume in the
+   group, applied to each of them individually. It is not a single budget
+   shared between them: ten subvolumes inheriting a ``limit`` of 500 are each
+   allowed 500 operations per second, not 50.
+
 FS Subvolumes
 -------------
 
@@ -737,6 +771,86 @@ Use a command of the following form to remove the enctag on a subvolume:
 .. prompt:: bash #
 
    ceph fs subvolume enctag rm <vol_name> <subvol_name> [--group_name <subvol_group_name>]
+
+.. _fs-volumes-qos:
+
+Setting QoS on a Subvolume
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The MDS can throttle metadata operations per subvolume using the dmClock
+algorithm. Throttling is applied only when ``mds_dmclock_enable`` is ``true``;
+this may be changed at runtime:
+
+.. prompt:: bash #
+
+   ceph config set mds mds_dmclock_enable true
+
+A subvolume's QoS is described by three parameters, all of which are integer
+counts of metadata operations per second and all of which must be greater
+than zero:
+
+``reservation``
+  The rate that the subvolume is guaranteed, even when the MDS is busy.
+
+``weight``
+  The share of the capacity left over after every subvolume's reservation has
+  been met, relative to the weights of the other subvolumes.
+
+``limit``
+  The rate the subvolume is never allowed to exceed, even when the MDS is
+  otherwise idle. It cannot be lower than ``reservation``.
+
+Set the QoS parameters of a subvolume by running a command of the following
+form:
+
+.. prompt:: bash #
+
+   ceph fs subvolume qos set <vol_name> <subvol_name> <reservation> <weight> <limit> [--group_name <subvol_group_name>]
+
+For example:
+
+.. prompt:: bash #
+
+   ceph fs subvolume qos set cephfs sub0 100 50 500
+
+The settings are stored by the MDS in the subvolume's root directory inode, so
+they persist across MDS restart and failover and are re-applied automatically
+when clients reconnect.
+
+Get the QoS parameters in effect for a subvolume by running a command of the
+following form:
+
+.. prompt:: bash #
+
+   ceph fs subvolume qos get <vol_name> <subvol_name> [--group_name <subvol_group_name>]
+
+::
+
+    {
+        "limit": 500,
+        "reservation": 100,
+        "weight": 50
+    }
+
+If nothing is set on the subvolume itself, the value inherited from its
+subvolume group (see `Setting QoS on a Subvolume Group`_) is reported instead
+and is flagged with ``"inherited": true``. An empty object is returned when no
+QoS applies to the subvolume at all.
+
+Remove the QoS parameters from a subvolume by running a command of the
+following form:
+
+.. prompt:: bash #
+
+   ceph fs subvolume qos rm <vol_name> <subvol_name> [--group_name <subvol_group_name>]
+
+Any QoS set on the subvolume group applies again once the subvolume's own
+setting has been removed.
+
+.. note:: The ``qos set`` and ``qos rm`` commands available over an MDS admin
+   socket set a transient, rank local override that is not persisted and is
+   lost on restart. Use the ``ceph fs subvolume qos`` commands described here
+   instead.
 
 Creating a Snapshot of a Subvolume
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
