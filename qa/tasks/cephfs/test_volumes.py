@@ -5121,6 +5121,224 @@ class TestSubvolumes(TestVolumesHelper):
             errmsgs='Error ENAMETOOLONG: use shorter group or subvol name, '
                     'combination of both should be less than 249 characters')
 
+class TestSubvolumeQoS(TestVolumesHelper):
+    """Tests for FS subvolume/subvolumegroup dmClock QoS operations."""
+
+    def _qos_get(self, subvolume, group=None):
+        args = ["subvolume", "qos", "get", self.volname, subvolume]
+        if group:
+            args += ["--group_name", group]
+        return json.loads(self._fs_cmd(*args))
+
+    def _qos_set(self, subvolume, reservation, weight, limit, group=None):
+        args = ["subvolume", "qos", "set", self.volname, subvolume,
+                str(reservation), str(weight), str(limit)]
+        if group:
+            args += ["--group_name", group]
+        return self._fs_cmd(*args)
+
+    def _qos_rm(self, subvolume, group=None):
+        args = ["subvolume", "qos", "rm", self.volname, subvolume]
+        if group:
+            args += ["--group_name", group]
+        return self._fs_cmd(*args)
+
+    def _wait_for_qos_enabled(self, enabled=True, timeout=60):
+        """
+        Wait for a rank to pick up an mds_dmclock_enable config change.
+        """
+        msg = f'dmclock scheduler qos_enabled never became {enabled}'
+        with safe_while(tries=timeout, sleep=1, action=msg) as proceed:
+            while proceed():
+                dump = self.fs.rank_asok(['dump', 'qos'])
+                if dump['qos_info']['qos_state']['qos_enabled'] == enabled:
+                    return
+
+    def _wait_for_scheduled_qos(self, volume_id, reservation, weight, limit,
+                                timeout=90):
+        """
+        Wait until the MDS dmClock scheduler reports the given QoS for a volume.
+        The scheduler picks the settings up off the subvolume root inode on the
+        request path, so this needs a client that is actually sending requests.
+        """
+        msg = (f'dmclock scheduler never reported qos '
+               f'{reservation}/{weight}/{limit} for {volume_id}')
+        with safe_while(tries=timeout, sleep=1, action=msg) as proceed:
+            while proceed():
+                self.mount_a.run_shell(["ls", "."])
+                dump = self.fs.rank_asok(['dump', 'qos'])
+                for vi in dump['qos_info']['volume_infos']:
+                    if vi['volume_id'] != volume_id or vi['use_default']:
+                        continue
+                    if (int(vi['reservation']) == reservation and
+                            int(vi['weight']) == weight and
+                            int(vi['limit']) == limit):
+                        return vi
+
+    def test_subvolume_qos_set_get_rm(self):
+        subvolume = self._gen_subvol_name()
+        self._fs_cmd("subvolume", "create", self.volname, subvolume)
+
+        # nothing set yet
+        self.assertEqual(self._qos_get(subvolume), {})
+
+        self._qos_set(subvolume, 100, 50, 500)
+        self.assertEqual(self._qos_get(subvolume),
+                         {"reservation": 100, "weight": 50, "limit": 500})
+
+        # overwrite
+        self._qos_set(subvolume, 200, 60, 600)
+        self.assertEqual(self._qos_get(subvolume),
+                         {"reservation": 200, "weight": 60, "limit": 600})
+
+        self._qos_rm(subvolume)
+        self.assertEqual(self._qos_get(subvolume), {})
+
+        # removing again is a no-op
+        self._qos_rm(subvolume)
+
+        self._fs_cmd("subvolume", "rm", self.volname, subvolume)
+        self._wait_for_trash_empty()
+
+    def test_subvolume_qos_set_invalid(self):
+        subvolume = self._gen_subvol_name()
+        self._fs_cmd("subvolume", "create", self.volname, subvolume)
+
+        # reservation greater than limit
+        try:
+            self._qos_set(subvolume, 600, 50, 500)
+        except CommandFailedError as ce:
+            self.assertEqual(ce.exitstatus, errno.EINVAL,
+                             "invalid error code on setting qos with "
+                             "reservation greater than limit")
+        else:
+            self.fail("expected 'fs subvolume qos set' to fail with "
+                      "reservation greater than limit")
+
+        # zero is not a valid value for any of the parameters
+        for args in ((0, 50, 500), (100, 0, 500), (100, 50, 0)):
+            try:
+                self._qos_set(subvolume, *args)
+            except CommandFailedError as ce:
+                self.assertEqual(ce.exitstatus, errno.EINVAL,
+                                 f"invalid error code on setting qos {args}")
+            else:
+                self.fail(f"expected 'fs subvolume qos set' to fail for {args}")
+
+        # nothing should have been set
+        self.assertEqual(self._qos_get(subvolume), {})
+
+        self._fs_cmd("subvolume", "rm", self.volname, subvolume)
+        self._wait_for_trash_empty()
+
+    def test_subvolume_qos_nonexistent_subvolume(self):
+        subvolume = self._gen_subvol_name()
+
+        for args in (["subvolume", "qos", "get", self.volname, subvolume],
+                     ["subvolume", "qos", "rm", self.volname, subvolume],
+                     ["subvolume", "qos", "set", self.volname, subvolume,
+                      "100", "50", "500"]):
+            try:
+                self._fs_cmd(*args)
+            except CommandFailedError as ce:
+                self.assertEqual(ce.exitstatus, errno.ENOENT,
+                                 f"invalid error code on {args} of "
+                                 "non-existent subvolume")
+            else:
+                self.fail(f"expected {args} to fail on a non-existent subvolume")
+
+    def test_subvolume_group_qos_set_get_rm(self):
+        group = self._gen_subvol_grp_name()
+        self._fs_cmd("subvolumegroup", "create", self.volname, group)
+
+        self.assertEqual(
+            json.loads(self._fs_cmd("subvolumegroup", "qos", "get",
+                                    self.volname, group)), {})
+
+        self._fs_cmd("subvolumegroup", "qos", "set", self.volname, group,
+                     "100", "50", "500")
+        self.assertEqual(
+            json.loads(self._fs_cmd("subvolumegroup", "qos", "get",
+                                    self.volname, group)),
+            {"reservation": 100, "weight": 50, "limit": 500})
+
+        self._fs_cmd("subvolumegroup", "qos", "rm", self.volname, group)
+        self.assertEqual(
+            json.loads(self._fs_cmd("subvolumegroup", "qos", "get",
+                                    self.volname, group)), {})
+
+        self._fs_cmd("subvolumegroup", "rm", self.volname, group)
+
+    def test_subvolume_qos_inherited_from_group(self):
+        group = self._gen_subvol_grp_name()
+        subvolume = self._gen_subvol_name()
+
+        self._fs_cmd("subvolumegroup", "create", self.volname, group)
+        self._fs_cmd("subvolume", "create", self.volname, subvolume,
+                     "--group_name", group)
+
+        self._fs_cmd("subvolumegroup", "qos", "set", self.volname, group,
+                     "100", "50", "500")
+
+        # the subvolume has none of its own, so it reports the group's
+        self.assertEqual(self._qos_get(subvolume, group=group),
+                         {"reservation": 100, "weight": 50, "limit": 500,
+                          "inherited": True})
+
+        # its own setting takes precedence
+        self._qos_set(subvolume, 200, 60, 600, group=group)
+        self.assertEqual(self._qos_get(subvolume, group=group),
+                         {"reservation": 200, "weight": 60, "limit": 600})
+
+        # and removing it falls back to the group's again
+        self._qos_rm(subvolume, group=group)
+        self.assertEqual(self._qos_get(subvolume, group=group),
+                         {"reservation": 100, "weight": 50, "limit": 500,
+                          "inherited": True})
+
+        self._fs_cmd("subvolume", "rm", self.volname, subvolume,
+                     "--group_name", group)
+        self._wait_for_trash_empty()
+        self._fs_cmd("subvolumegroup", "rm", self.volname, group)
+
+    def test_subvolume_qos_survives_mds_failover(self):
+        """
+        That QoS set through mgr/volumes is applied by the MDS dmClock
+        scheduler and comes back by itself after a failover.
+        """
+        subvolume = self._gen_subvol_name()
+        self._fs_cmd("subvolume", "create", self.volname, subvolume,
+                     "--mode=777")
+        self._qos_set(subvolume, 100, 50, 500)
+
+        subvolpath = self._get_subvolume_path(self.volname, subvolume)
+        volume_id = os.path.join("/", "volumes", "_nogroup", subvolume)
+
+        self.config_set('mds', 'mds_dmclock_enable', 'true')
+        self._wait_for_qos_enabled()
+
+        # a volume is only accounted for once a client session names it as root
+        self.mount_a.umount_wait()
+        self.mount_a.mount_wait(cephfs_mntpt=os.path.join("/", subvolpath))
+
+        self._wait_for_scheduled_qos(volume_id, 100, 50, 500)
+
+        # nothing re-applies the setting across the failover: the MDS reads it
+        # back off the subvolume root inode
+        self.fs.rank_fail()
+        self.fs.wait_for_daemons()
+
+        self._wait_for_scheduled_qos(volume_id, 100, 50, 500)
+
+        self.config_set('mds', 'mds_dmclock_enable', 'false')
+        self._wait_for_qos_enabled(enabled=False)
+
+        self.mount_a.umount_wait()
+        self.mount_a.mount_wait()
+
+        self._fs_cmd("subvolume", "rm", self.volname, subvolume)
+        self._wait_for_trash_empty()
+
 class TestPausePurging(TestVolumesHelper):
     '''
     Tests related to config "mgr/volumes/pause_purging".
