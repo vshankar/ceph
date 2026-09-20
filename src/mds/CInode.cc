@@ -5713,6 +5713,39 @@ charmap_md_t<mempool::mds_co::pool_allocator> const* CInode::get_charmap() const
   return nullptr;
 }
 
+qos_md_t<mempool::mds_co::pool_allocator> const* CInode::get_qos(bool inherit) const
+{
+  dout(25) << __func__ << ": " << *this << dendl;
+
+  /* QoS is normally attached to a subvolume (or subvolume group) root, but the
+   * inode it applies to may be anywhere below it, so walk the parents looking
+   * for the nearest ancestor carrying the setting. The walk stops at a base or
+   * system inode. N.B. inodes not yet linked into a dir (i.e. anonymous
+   * inodes) will not have a parent yet.
+   */
+  const CInode *in = this;
+  while (true) {
+    auto const& pi = in->get_projected_inode();
+    if (pi->has_qos()) {
+      return &pi->get_qos();
+    }
+    if (!inherit || in->is_system() || in->is_base()) {
+      break;
+    }
+    const CDentry *pdn = in->get_parent_dn();
+    if (!pdn) {
+      break;
+    }
+    if (pi->nlink == 0) {
+      // ignore QoS for an unlinked directory
+      break;
+    }
+    in = pdn->get_dir()->inode;
+  }
+
+  return nullptr;
+}
+
 mds_rank_t CInode::get_export_pin(bool inherit) const
 {
   auto&& balancer = mdcache->mds->balancer;

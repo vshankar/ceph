@@ -267,6 +267,8 @@ public:
   void handle_client_setdirlayout(const MDRequestRef& mdr);
 
   int parse_quota_vxattr(std::string name, std::string value, quota_info_t *quota);
+  int parse_qos_vxattr(std::string value, uint64_t *reservation, uint64_t *weight,
+		       uint64_t *limit);
   void create_quota_realm(CInode *in);
   int parse_layout_vxattr_json(std::string name, std::string value,
 			       const OSDMap& osdmap, file_layout_t *layout);
@@ -501,6 +503,8 @@ private:
            xattr_name == "ceph.dir.pin.random" ||
            xattr_name == "ceph.dir.pin.distributed" ||
            xattr_name == "ceph.dir.charmap"sv ||
+           xattr_name == "ceph.dir.qos"sv ||
+           xattr_name == "ceph.dir.qos.effective"sv ||
            xattr_name == "ceph.dir.normalization"sv ||
            xattr_name == "ceph.dir.encoding"sv ||
            xattr_name == "ceph.dir.casesensitive"sv ||
@@ -521,6 +525,8 @@ private:
 	   xattr_name == "ceph.dir.pin.random" ||
 	   xattr_name == "ceph.dir.pin.distributed" ||
 	   xattr_name == "ceph.dir.charmap"sv ||
+	   xattr_name == "ceph.dir.qos"sv ||
+	   xattr_name == "ceph.dir.qos.effective"sv ||
 	   xattr_name == "ceph.dir.normalization"sv ||
 	   xattr_name == "ceph.dir.encoding"sv ||
 	   xattr_name == "ceph.dir.casesensitive"sv ||

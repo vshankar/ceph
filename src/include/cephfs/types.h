@@ -319,6 +319,92 @@ private:
   str_t encoding{DEFAULT_ENCODING};
 };
 
+/* Per-directory dmClock QoS parameters (reservation/weight/limit) used by the
+ * MDS dmClock scheduler. Attached to a subvolume (or subvolume group) root
+ * directory so that the settings survive MDS restart/failover; the values are
+ * inherited by descendants unless a nearer ancestor overrides them.
+ */
+template<template<typename> class Allocator>
+class qos_md_t {
+public:
+  static constexpr int STRUCT_V = 1;
+  static constexpr int COMPAT_V = 1;
+
+  qos_md_t() = default;
+  qos_md_t(auto const& qmd) {
+    reservation = qmd.get_reservation();
+    weight = qmd.get_weight();
+    limit = qmd.get_limit();
+  }
+  qos_md_t<Allocator>& operator=(auto const& other) {
+    reservation = other.get_reservation();
+    weight = other.get_weight();
+    limit = other.get_limit();
+    return *this;
+  }
+
+  void encode(ceph::buffer::list& bl, uint64_t features) const {
+    ENCODE_START(STRUCT_V, COMPAT_V, bl);
+    ceph::encode(reservation, bl);
+    ceph::encode(weight, bl);
+    ceph::encode(limit, bl);
+    ENCODE_FINISH(bl);
+  }
+  void decode(ceph::buffer::list::const_iterator& p) {
+    DECODE_START(STRUCT_V, p);
+    ceph::decode(reservation, p);
+    ceph::decode(weight, p);
+    ceph::decode(limit, p);
+    DECODE_FINISH(p);
+  }
+
+  void print(std::ostream& os) const {
+    os << "qos_md_t(r=" << reservation << " w=" << weight << " l=" << limit << ")";
+  }
+
+  void dump(ceph::Formatter* f) const;
+
+  uint64_t get_reservation() const {
+    return reservation;
+  }
+  uint64_t get_weight() const {
+    return weight;
+  }
+  uint64_t get_limit() const {
+    return limit;
+  }
+  void set_reservation(uint64_t v) {
+    reservation = v;
+  }
+  void set_weight(uint64_t v) {
+    weight = v;
+  }
+  void set_limit(uint64_t v) {
+    limit = v;
+  }
+
+  /* all three parameters must be set for the dmClock scheduler to consider
+   * the volume; a reservation above the limit is nonsensical.
+   */
+  bool is_valid() const {
+    return reservation > 0 && weight > 0 && limit > 0 && reservation <= limit;
+  }
+
+  bool operator==(const qos_md_t<Allocator>& other) const {
+    return reservation == other.reservation &&
+	   weight == other.weight &&
+	   limit == other.limit;
+  }
+  bool operator!=(const qos_md_t<Allocator>& other) const {
+    return !(*this == other);
+  }
+
+private:
+  uint64_t reservation = 0;
+  uint64_t weight = 0;
+  uint64_t limit = 0;
+};
+
 
 
 typedef enum {
@@ -488,11 +574,13 @@ template<template<typename> class Allocator>
 struct optmetadata_server_t {
   using opts = std::variant<
     unknown_md_t<Allocator>,
-    charmap_md_t<Allocator>
+    charmap_md_t<Allocator>,
+    qos_md_t<Allocator>
   >;
   enum kind_t : uint64_t {
     UNKNOWN,
     CHARMAP,
+    QOS,
     _MAX
   };
 };
@@ -533,7 +621,10 @@ struct optmetadata_singleton {
     constexpr auto optsmax = std::variant_size_v<optmetadata_t>;
     static_assert(kind_t::_MAX == optsmax);
     static_assert(kind_t::UNKNOWN == 0);
-    if (u64kind > optsmax) {
+    /* an optmetadata kind added by a newer MDS decodes as unknown_md_t, which
+     * preserves the encoded payload verbatim.
+     */
+    if (u64kind >= optsmax) {
       return kind_t::UNKNOWN;
     } else {
       return (kind_t)u64kind;
@@ -862,6 +953,25 @@ struct inode_t {
   }
   void del_charmap() {
     optmetadata.del_opt(optmetadata_singleton_server_t::kind_t::CHARMAP);
+  }
+
+  bool has_qos() const {
+    return optmetadata.has_opt(optmetadata_singleton_server_t::kind_t::QOS);
+  }
+  auto& get_qos() const {
+    auto& opt = optmetadata.get_opt(optmetadata_singleton_server_t::kind_t::QOS);
+    return opt.template get_meta< qos_md_t >();
+  }
+  auto& get_qos() {
+    auto& opt = optmetadata.get_opt(optmetadata_singleton_server_t::kind_t::QOS);
+    return opt.template get_meta< qos_md_t >();
+  }
+  auto& set_qos() {
+    auto& opt = optmetadata.get_or_create_opt(optmetadata_singleton_server_t::kind_t::QOS);
+    return opt.template get_meta< qos_md_t >();
+  }
+  void del_qos() {
+    optmetadata.del_opt(optmetadata_singleton_server_t::kind_t::QOS);
   }
 
   void encode(ceph::buffer::list &bl, uint64_t features) const;

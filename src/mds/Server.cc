@@ -6162,6 +6162,45 @@ int Server::parse_quota_vxattr(string name, string value, quota_info_t *quota)
   return 0;
 }
 
+int Server::parse_qos_vxattr(string value, uint64_t *reservation,
+			     uint64_t *weight, uint64_t *limit)
+{
+  dout(20) << __func__ << " value '" << value << "'" << dendl;
+
+  JSONParser json_parser;
+  if (!json_parser.parse(value.c_str(), value.length()) || !json_parser.is_object()) {
+    dout(10) << __func__ << ": bad json" << dendl;
+    return -EINVAL;
+  }
+
+  std::string field;
+  try {
+    field = "reservation";
+    JSONDecoder::decode_json(field.c_str(), *reservation, &json_parser, true);
+
+    field = "weight";
+    JSONDecoder::decode_json(field.c_str(), *weight, &json_parser, true);
+
+    field = "limit";
+    JSONDecoder::decode_json(field.c_str(), *limit, &json_parser, true);
+  } catch (JSONDecoder::err&) {
+    dout(10) << __func__ << ": json is missing a mandatory field named "
+	     << field << dendl;
+    return -EINVAL;
+  }
+
+  if (*reservation == 0 || *weight == 0 || *limit == 0) {
+    dout(10) << __func__ << ": reservation, weight and limit must all be non-zero" << dendl;
+    return -EINVAL;
+  }
+  if (*reservation > *limit) {
+    dout(10) << __func__ << ": reservation cannot be greater than limit" << dendl;
+    return -EINVAL;
+  }
+
+  return 0;
+}
+
 void Server::create_quota_realm(CInode *in)
 {
   dout(10) << __func__ << " " << *in << dendl;
@@ -6757,6 +6796,45 @@ void Server::handle_client_setvxattr(const MDRequestRef& mdr, CInode *cur)
       respond_to_request(mdr, -EINVAL);
       return;
     }
+  } else if (name == "ceph.dir.qos"sv) {
+    /* dmClock QoS for the subtree rooted here; consumed by the MDS dmClock
+     * scheduler and inherited by descendants (see CInode::get_qos()).
+     */
+    if (!cur->is_dir() || cur->is_root()) {
+      respond_to_request(mdr, -EINVAL);
+      return;
+    }
+
+    uint64_t reservation = 0, weight = 0, limit = 0;
+    if (!is_rmxattr) {
+      int r = parse_qos_vxattr(value, &reservation, &weight, &limit);
+      if (r < 0) {
+	respond_to_request(mdr, r);
+	return;
+      }
+    }
+
+    if (!xlock_policylock(mdr, cur))
+      return;
+
+    if (is_rmxattr) {
+      if (!cur->get_projected_inode()->has_qos()) {
+	respond_to_request(mdr, 0);
+	return;
+      }
+      auto pi = cur->project_inode(mdr);
+      pip = pi.inode.get();
+      dout(20) << "deleting qos metadata" << dendl;
+      pip->del_qos();
+    } else {
+      auto pi = cur->project_inode(mdr);
+      pip = pi.inode.get();
+      auto& q = pip->set_qos();
+      q.set_reservation(reservation);
+      q.set_weight(weight);
+      q.set_limit(limit);
+      dout(20) << "set qos: " << q << dendl;
+    }
   } else if (name == "ceph.dir.casesensitive"sv) {
     if (is_rmxattr) {
       value = "1";
@@ -7349,6 +7427,28 @@ void Server::handle_client_getvxattr(const MDRequestRef& mdr)
       auto& c = pip->get_charmap();
       Formatter* f = new JSONFormatter;
       f->dump_object("charmap", c);
+      f->flush(*css);
+      delete f;
+    }
+  } else if (xattr_name == "ceph.dir.qos"sv) {
+    auto&& pip = cur->get_projected_inode();
+    if (!pip->has_qos()) {
+      r = -ENODATA;
+    } else {
+      auto& q = pip->get_qos();
+      Formatter* f = new JSONFormatter;
+      f->dump_object("qos", q);
+      f->flush(*css);
+      delete f;
+    }
+  } else if (xattr_name == "ceph.dir.qos.effective"sv) {
+    // QoS actually in effect here, i.e. including one inherited from an ancestor
+    auto* qp = cur->get_qos();
+    if (!qp) {
+      r = -ENODATA;
+    } else {
+      Formatter* f = new JSONFormatter;
+      f->dump_object("qos", *qp);
       f->flush(*css);
       delete f;
     }

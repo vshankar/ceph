@@ -110,6 +110,13 @@ void charmap_md_t<Allocator>::dump(ceph::Formatter* f) const {
 }
 
 template<template<typename> class Allocator>
+void qos_md_t<Allocator>::dump(ceph::Formatter* f) const {
+  f->dump_unsigned("reservation", reservation);
+  f->dump_unsigned("weight", weight);
+  f->dump_unsigned("limit", limit);
+}
+
+template<template<typename> class Allocator>
 void unknown_md_t<Allocator>::dump(ceph::Formatter* f) const {
   f->dump_bool("length", payload.size());
 }

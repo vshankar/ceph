@@ -594,12 +594,15 @@ void MDSDaemon::set_up_admin_socket()
                                      "name=weight,type=CephInt,req=true "
                                      "name=limit,type=CephInt,req=true",
                                      asok_hook,
-                                     "set qos info");
+                                     "set qos info (transient rank local "
+                                     "override; use `ceph fs subvolume qos "
+                                     "set` for a persistent setting)");
   ceph_assert(r == 0);
   r = admin_socket->register_command("qos rm "
                                      "name=path,type=CephString,req=true",
                                      asok_hook,
-                                     "rm qos info");
+                                     "drop a qos info override set with "
+                                     "`qos set`");
   ceph_assert(r == 0);
   r = admin_socket->register_command("qos get "
                                      "name=path,type=CephString,req=true",

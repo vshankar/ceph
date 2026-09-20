@@ -172,6 +172,19 @@ class VolumeInfo : public QoSInfo {
 private:
   bool use_default;
   bool updated;
+  /* QoS was set through the asok (`qos set`) rather than read from the
+   * subvolume root inode; such an override is transient and suppresses
+   * refreshes from the inode until it is dropped with `qos rm`.
+   */
+  bool asok_override;
+  /* an update reflecting the inode resident QoS has been queued but not yet
+   * applied; suppresses queuing a duplicate on every subsequent request
+   */
+  bool qos_refresh_pending;
+  /* subvolume root inode this volume's persistent QoS is read from, memoized
+   * so that a refresh is an inode cache lookup rather than a path walk.
+   */
+  inodeno_t root_ino;
   std::set<SessionId> session_list;
   int inflight_requests;
   DecayCounter throttle;
@@ -180,7 +193,8 @@ private:
 
 public:
   explicit VolumeInfo():
-    QoSInfo(0.0, 0.0, 0.0), use_default(true), inflight_requests(0)
+    QoSInfo(0.0, 0.0, 0.0), use_default(true), asok_override(false),
+    qos_refresh_pending(false), inflight_requests(0)
   {
     throttle = DecayCounter(60.0); // 60secs
     latency_sum = 0.0;
@@ -240,6 +254,36 @@ public:
     return updated;
   }
 
+  bool is_asok_override() const
+  {
+    return asok_override;
+  }
+
+  void set_asok_override(bool flag)
+  {
+    asok_override = flag;
+  }
+
+  bool is_qos_refresh_pending() const
+  {
+    return qos_refresh_pending;
+  }
+
+  void set_qos_refresh_pending(bool flag)
+  {
+    qos_refresh_pending = flag;
+  }
+
+  inodeno_t get_root_ino() const
+  {
+    return root_ino;
+  }
+
+  void set_root_ino(inodeno_t ino)
+  {
+    root_ino = ino;
+  }
+
   void update(const ClientInfo& client_info, const bool use_default)
   {
     set_reservation(client_info.reservation);
@@ -279,6 +323,8 @@ public:
   void dump(Formatter *f, const std::string &vid) const
   {
     f->dump_string("volume_id", vid);
+    f->dump_string("qos_source", is_use_default() ? "default" :
+				 (is_asok_override() ? "asok" : "inode"));
     f->dump_bool("use_default", is_use_default());
     if (!is_use_default()) {
       f->dump_float("reservation", get_reservation());
@@ -389,7 +435,9 @@ public:
   void try_enable_qos_feature();
   void try_disable_qos_feature();
 
-  CInode *read_xattrs(const VolumeId vid);
+  /* persistent (inode resident) QoS */
+  CInode *find_volume_inode(const VolumeId &vid);
+  void refresh_volume_qos(const VolumeId &vid);
 
   /* request event handler */
   void begin_schedule_thread();

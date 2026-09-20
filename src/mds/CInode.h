@@ -1015,6 +1015,7 @@ class CInode : public MDSCacheObject, public InodeStoreBase, public Counter<CIno
   }
 
   charmap_md_t<mempool::mds_co::pool_allocator> const* get_charmap() const;
+  qos_md_t<mempool::mds_co::pool_allocator> const* get_qos(bool inherit=true) const;
 
   mds_rank_t get_export_pin(bool inherit=true) const;
   void check_pin_policy(mds_rank_t target);

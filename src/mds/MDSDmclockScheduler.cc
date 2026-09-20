@@ -16,6 +16,9 @@
 #include "SessionMap.h"
 #include "MDSDmclockScheduler.h"
 #include "mds/MDSMap.h"
+#include "mds/MDCache.h"
+#include "mds/CDir.h"
+#include "mds/CDentry.h"
 #include "common/debug.h"
 
 #define dout_context g_ceph_context
@@ -82,16 +85,24 @@ void MDSDmclockScheduler::handle_client_request(const MDSReqRef &mds_req)
 {
   dout(10) << __func__ << " " << *mds_req << dendl;
 
-  if (mds->mds_dmclock_scheduler->default_conf.is_enabled() == true &&
+  if (default_conf.is_enabled() == true &&
       mds_req->get_orig_source().is_client() &&
-      mds->is_active() &&
-      check_volume_info_updated(get_volume_id(mds->get_session(mds_req))) &&
-      check_volume_info_validity(get_volume_id(mds->get_session(mds_req)))) {
-    Cost cost = get_op_cost(mds_req->get_op());
-    enqueue_client_request<MDSReqRef>(mds_req, get_volume_id(mds->get_session(mds_req)), cost);
-  } else {
-    mds->server->handle_client_request(mds_req);
+      mds->is_active()) {
+    VolumeId vid = get_volume_id(mds->get_session(mds_req));
+
+    /* pick up QoS persisted on the subvolume root, which is how settings
+     * survive an MDS restart or failover.
+     */
+    refresh_volume_qos(vid);
+
+    if (check_volume_info_updated(vid) && check_volume_info_validity(vid)) {
+      Cost cost = get_op_cost(mds_req->get_op());
+      enqueue_client_request<MDSReqRef>(mds_req, vid, cost);
+      return;
+    }
   }
+
+  mds->server->handle_client_request(mds_req);
 }
 
 void MDSDmclockScheduler::submit_request_to_mds(const VolumeId& vid, std::unique_ptr<ClientRequest>&& request,
@@ -381,6 +392,143 @@ void MDSDmclockScheduler::update_volume_info(const VolumeId &vid, const ClientIn
   }
 }
 
+/*
+ * Resolve a volume id (i.e. a subvolume root path such as
+ * /volumes/<group>/<subvolume>) to its inode, looking only in this rank's
+ * cache. No traversal is started and nothing blocks: if any component is not
+ * cached the caller simply retries on a later request. This is sufficient
+ * because an MDS that holds any inode below the subvolume root necessarily
+ * holds the root's ancestry too.
+ */
+CInode *MDSDmclockScheduler::find_volume_inode(const VolumeId &vid)
+{
+  if (mds == nullptr || vid.empty()) {
+    return nullptr;
+  }
+
+  CInode *cur = mds->mdcache->get_root();
+  if (cur == nullptr) {
+    return nullptr;
+  }
+
+  filepath path(vid);
+  for (unsigned i = 0; i < path.depth(); i++) {
+    if (!cur->is_dir()) {
+      return nullptr;
+    }
+    CDir *dir = cur->get_dirfrag(cur->pick_dirfrag(path[i]));
+    if (dir == nullptr) {
+      return nullptr;
+    }
+    CDentry *dn = dir->lookup(path[i]);
+    if (dn == nullptr) {
+      return nullptr;
+    }
+    cur = dn->get_linkage()->get_inode();
+    if (cur == nullptr) {
+      return nullptr;
+    }
+  }
+
+  return cur;
+}
+
+/*
+ * Reconcile a volume's in-memory QoS with the QoS persisted on its subvolume
+ * root inode (or inherited from an ancestor, e.g. the subvolume group). Called
+ * on the request path, so the common case must be cheap: once the root inode
+ * is known this is an inode cache lookup plus a comparison.
+ *
+ * Must be called with mds_lock held.
+ */
+void MDSDmclockScheduler::refresh_volume_qos(const VolumeId &vid)
+{
+  inodeno_t root_ino;
+
+  {
+    std::lock_guard lock(volume_info_lock);
+    VolumeInfo *vi = get_volume_info_ptr(vid);
+    if (vi == nullptr) {
+      /* no session has been accounted for this volume yet */
+      return;
+    }
+    if (vi->is_asok_override()) {
+      dout(20) << __func__ << " volume_id " << vid
+	       << " has an asok override, not refreshing from inode" << dendl;
+      return;
+    }
+    root_ino = vi->get_root_ino();
+  }
+
+  CInode *in = nullptr;
+  if (root_ino != inodeno_t()) {
+    in = mds->mdcache->get_inode(root_ino);
+    if (in != nullptr && in->get_projected_inode()->nlink == 0) {
+      /* the memoized inode has since been unlinked, resolve the path again */
+      in = nullptr;
+    }
+  }
+
+  if (in == nullptr) {
+    in = find_volume_inode(vid);
+    if (in == nullptr) {
+      dout(20) << __func__ << " volume_id " << vid << " is not cached" << dendl;
+      return;
+    }
+  }
+
+  /* on a non-auth rank this reads the replicated inode, so a change may be
+   * picked up slightly late; that is acceptable for a throttling policy.
+   */
+
+  ClientInfo client_info(0.0, 0.0, 0.0);
+  bool use_default = true;
+
+  if (auto *qos = in->get_qos(); qos != nullptr && qos->is_valid()) {
+    client_info = ClientInfo(qos->get_reservation(), qos->get_weight(),
+			     qos->get_limit());
+    use_default = false;
+  }
+
+  {
+    std::lock_guard lock(volume_info_lock);
+    VolumeInfo *vi = get_volume_info_ptr(vid);
+    if (vi == nullptr || vi->is_asok_override()) {
+      return;
+    }
+    vi->set_root_ino(in->ino());
+
+    if (vi->get_updated() &&
+	vi->is_use_default() == use_default &&
+	(use_default ||
+	 (vi->get_reservation() == client_info.reservation &&
+	  vi->get_weight() == client_info.weight &&
+	  vi->get_limit() == client_info.limit))) {
+      /* unchanged */
+      return;
+    }
+
+    if (vi->is_qos_refresh_pending()) {
+      /* an update is already on its way; requests keep arriving while it is
+       * queued, so do not pile up duplicates
+       */
+      return;
+    }
+    vi->set_qos_refresh_pending(true);
+  }
+
+  dout(10) << __func__ << " volume_id " << vid << " " << client_info
+	   << " use_default " << use_default << dendl;
+
+  enqueue_update_request(vid, client_info, use_default,
+			 [this, vid]() {
+			   std::lock_guard lock(volume_info_lock);
+			   if (VolumeInfo *vi = get_volume_info_ptr(vid); vi != nullptr) {
+			     vi->set_qos_refresh_pending(false);
+			   }
+			 });
+}
+
 void MDSDmclockScheduler::set_default_volume_info(const VolumeId &vid)
 {
   ClientInfo client_info(0.0, 0.0, 0.0);
@@ -443,6 +591,11 @@ void MDSDmclockScheduler::add_session(Session *session)
   } 
 
   add_session_to_volume_info(vid, sid);
+
+  /* a reconnecting client is the point at which QoS persisted on the
+   * subvolume root becomes relevant again after a restart or failover
+   */
+  refresh_volume_qos(vid);
 }
 
 void MDSDmclockScheduler::remove_session(Session *session)
@@ -826,6 +979,20 @@ bool MDSDmclockScheduler::_process_asok_qos_set(const cmdmap_t &cmdmap, std::ost
 
   ClientInfo info(reservation, weight, limit);
 
+  /* this is a transient, rank local override: mark it so that the QoS
+   * persisted on the subvolume root does not overwrite it. `qos rm` drops the
+   * override and hands the volume back to its persistent setting.
+   */
+  {
+    std::lock_guard lock(volume_info_lock);
+    VolumeInfo *vi = get_volume_info_ptr(path);
+    if (vi == nullptr) {
+      ss << "volume_info doesn't exist (" << path << ")";
+      return false;
+    }
+    vi->set_asok_override(true);
+  }
+
   enqueue_update_request(path, info, false);
 
   return true;
@@ -854,7 +1021,27 @@ bool MDSDmclockScheduler::_process_asok_qos_rm(const cmdmap_t &cmdmap, std::ostr
 
   dout(5) << "dmclock path " << path << dendl;
 
+  {
+    std::lock_guard lock(volume_info_lock);
+    VolumeInfo *vi = get_volume_info_ptr(path);
+    if (vi == nullptr) {
+      ss << "volume_info doesn't exist (" << path << ")";
+      return false;
+    }
+    vi->set_asok_override(false);
+    /* force refresh_volume_qos() below to re-evaluate rather than compare
+     * against the override we are dropping
+     */
+    vi->set_updated(false);
+    vi->set_qos_refresh_pending(false);
+  }
+
+  /* reset to the default first so that dropping the override takes effect even
+   * if the subvolume root is not cached on this rank, then pick up whatever is
+   * persisted there
+   */
   set_default_volume_info(path);
+  refresh_volume_qos(path);
 
   return true;
 }
