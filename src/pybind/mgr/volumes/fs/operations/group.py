@@ -7,6 +7,7 @@ import cephfs
 
 from .snapshot_util import mksnap, rmsnap
 from .charmap_util import charmap_get, charmap_set, charmap_rm
+from .qos_util import qos_get, qos_set, qos_rm
 from .pin_util import pin
 from .template import GroupTemplate
 from ..fs_util import listdir, listsnaps, get_ancestor_xattr, create_base_dir, has_subdir
@@ -87,6 +88,15 @@ class Group(GroupTemplate):
 
     def charmap_get(self, setting):
         return charmap_get(self.fs, self.path, setting)
+
+    def qos_set(self, reservation, weight, limit):
+        return qos_set(self.fs, self.path, reservation, weight, limit)
+
+    def qos_rm(self):
+        return qos_rm(self.fs, self.path)
+
+    def qos_get(self):
+        return qos_get(self.fs, self.path)
 
     def create_snapshot(self, snapname):
         snappath = os.path.join(self.path,

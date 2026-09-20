@@ -41,6 +41,7 @@ class SubvolumeOpType(Enum):
     REMOVE                = 'rm'
     REMOVE_FORCE          = 'rm-force'
     CHARMAP               = 'charmap'
+    QOS                   = 'qos'
     PIN                   = 'pin'
     LIST                  = 'ls'
     GETPATH               = 'getpath'

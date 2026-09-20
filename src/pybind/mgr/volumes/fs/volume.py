@@ -485,6 +485,57 @@ class VolumeClient(CephfsClient["Module"]):
             ret = self.volume_exception_to_retval(ve)
         return ret
 
+    def subvolume_qos_set(self, **kwargs):
+        ret         = 0, "", ""
+        volname     = kwargs['vol_name']
+        subvolname  = kwargs['sub_name']
+        reservation = kwargs['reservation']
+        weight      = kwargs['weight']
+        limit       = kwargs['limit']
+        groupname   = kwargs['group_name']
+
+        try:
+            with open_volume(self, volname) as fs_handle:
+                with open_group(fs_handle, self.volspec, groupname) as group:
+                    with open_subvol(self.mgr, fs_handle, self.volspec, group, subvolname, SubvolumeOpType.QOS) as subvolume:
+                        v = subvolume.qos_set(reservation, weight, limit)
+                        ret = 0, v, ""
+        except VolumeException as ve:
+            ret = self.volume_exception_to_retval(ve)
+        return ret
+
+    def subvolume_qos_rm(self, **kwargs):
+        ret         = 0, "", ""
+        volname     = kwargs['vol_name']
+        subvolname  = kwargs['sub_name']
+        groupname   = kwargs['group_name']
+
+        try:
+            with open_volume(self, volname) as fs_handle:
+                with open_group(fs_handle, self.volspec, groupname) as group:
+                    with open_subvol(self.mgr, fs_handle, self.volspec, group, subvolname, SubvolumeOpType.QOS) as subvolume:
+                        subvolume.qos_rm()
+                        ret = 0, json.dumps({}), ""
+        except VolumeException as ve:
+            ret = self.volume_exception_to_retval(ve)
+        return ret
+
+    def subvolume_qos_get(self, **kwargs):
+        ret         = 0, "", ""
+        volname     = kwargs['vol_name']
+        subvolname  = kwargs['sub_name']
+        groupname   = kwargs['group_name']
+
+        try:
+            with open_volume(self, volname) as fs_handle:
+                with open_group(fs_handle, self.volspec, groupname) as group:
+                    with open_subvol(self.mgr, fs_handle, self.volspec, group, subvolname, SubvolumeOpType.QOS) as subvolume:
+                        v = subvolume.qos_get()
+                        ret = 0, v, ""
+        except VolumeException as ve:
+            ret = self.volume_exception_to_retval(ve)
+        return ret
+
     def subvolume_getpath(self, **kwargs):
         ret        = None
         volname    = kwargs['vol_name']
@@ -1318,6 +1369,51 @@ class VolumeClient(CephfsClient["Module"]):
             with open_volume(self, volname) as fs_handle:
                 with open_group(fs_handle, self.volspec, groupname) as group:
                     v = group.charmap_get(setting)
+                    ret = 0, v, ""
+        except VolumeException as ve:
+            ret = self.volume_exception_to_retval(ve)
+        return ret
+
+    def subvolume_group_qos_set(self, **kwargs):
+        ret           = 0, "", ""
+        volname       = kwargs['vol_name']
+        groupname     = kwargs['group_name']
+        reservation   = kwargs['reservation']
+        weight        = kwargs['weight']
+        limit         = kwargs['limit']
+
+        try:
+            with open_volume(self, volname) as fs_handle:
+                with open_group(fs_handle, self.volspec, groupname) as group:
+                    v = group.qos_set(reservation, weight, limit)
+                    ret = 0, v, ""
+        except VolumeException as ve:
+            ret = self.volume_exception_to_retval(ve)
+        return ret
+
+    def subvolume_group_qos_rm(self, **kwargs):
+        ret           = 0, "", ""
+        volname       = kwargs['vol_name']
+        groupname     = kwargs['group_name']
+
+        try:
+            with open_volume(self, volname) as fs_handle:
+                with open_group(fs_handle, self.volspec, groupname) as group:
+                    group.qos_rm()
+                    ret = 0, json.dumps({}), ""
+        except VolumeException as ve:
+            ret = self.volume_exception_to_retval(ve)
+        return ret
+
+    def subvolume_group_qos_get(self, **kwargs):
+        ret           = 0, "", ""
+        volname       = kwargs['vol_name']
+        groupname     = kwargs['group_name']
+
+        try:
+            with open_volume(self, volname) as fs_handle:
+                with open_group(fs_handle, self.volspec, groupname) as group:
+                    v = group.qos_get()
                     ret = 0, v, ""
         except VolumeException as ve:
             ret = self.volume_exception_to_retval(ve)

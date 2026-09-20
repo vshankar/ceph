@@ -10,6 +10,7 @@ from pathlib import Path
 import cephfs
 
 from ..charmap_util import charmap_get, charmap_set, charmap_rm
+from ..qos_util import qos_get, qos_set, qos_rm
 from ..pin_util import pin
 from .subvolume_attrs import SubvolumeTypes
 from .metadata_manager import MetadataManager
@@ -458,6 +459,17 @@ class SubvolumeBase(object):
 
     def charmap_get(self, setting):
         return charmap_get(self.fs, self.path, setting)
+
+    def qos_set(self, reservation, weight, limit):
+        # QoS is keyed by the subvolume root (i.e. base_path) in the MDS
+        # dmclock scheduler, not by the versioned data directory.
+        return qos_set(self.fs, self.base_path, reservation, weight, limit)
+
+    def qos_rm(self):
+        return qos_rm(self.fs, self.base_path)
+
+    def qos_get(self):
+        return qos_get(self.fs, self.base_path)
 
     def init_config(self, version, subvolume_type,
                     subvolume_path, subvolume_state):

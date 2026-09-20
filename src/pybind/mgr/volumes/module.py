@@ -392,6 +392,32 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
         },
 
         {
+            'cmd': 'fs subvolumegroup qos set'
+                   ' name=vol_name,type=CephString'
+                   ' name=group_name,type=CephString,req=true'
+                   ' name=reservation,type=CephInt,range=1'
+                   ' name=weight,type=CephInt,range=1'
+                   ' name=limit,type=CephInt,range=1',
+            'desc': "Set dmclock QoS (reservation/weight/limit) for a subvolumegroup; "
+                    "inherited by subvolumes in the group that do not set their own",
+            'perm': 'rw'
+        },
+        {
+            'cmd': 'fs subvolumegroup qos rm'
+                   ' name=vol_name,type=CephString'
+                   ' name=group_name,type=CephString,req=true',
+            'desc': "Remove dmclock QoS settings from a subvolumegroup",
+            'perm': 'rw'
+        },
+        {
+            'cmd': 'fs subvolumegroup qos get'
+                   ' name=vol_name,type=CephString'
+                   ' name=group_name,type=CephString,req=true',
+            'desc': "Get dmclock QoS settings in effect for a subvolumegroup",
+            'perm': 'r'
+        },
+
+        {
             'cmd': 'fs subvolumegroup snapshot ls '
                    'name=vol_name,type=CephString '
                    'name=group_name,type=CephString ',
@@ -556,6 +582,34 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
                    ' name=group_name,type=CephString,req=false',
             'desc': "Get charmap settings for subvolumegroup",
             'perm': 'rw'
+        },
+        {
+            'cmd': 'fs subvolume qos set'
+                   ' name=vol_name,type=CephString'
+                   ' name=sub_name,type=CephString'
+                   ' name=reservation,type=CephInt,range=1'
+                   ' name=weight,type=CephInt,range=1'
+                   ' name=limit,type=CephInt,range=1'
+                   ' name=group_name,type=CephString,req=false',
+            'desc': "Set dmclock QoS (reservation/weight/limit) for a subvolume; "
+                    "the setting is persistent across MDS restart and failover",
+            'perm': 'rw'
+        },
+        {
+            'cmd': 'fs subvolume qos rm'
+                   ' name=vol_name,type=CephString'
+                   ' name=sub_name,type=CephString'
+                   ' name=group_name,type=CephString,req=false',
+            'desc': "Remove dmclock QoS settings from a subvolume",
+            'perm': 'rw'
+        },
+        {
+            'cmd': 'fs subvolume qos get'
+                   ' name=vol_name,type=CephString'
+                   ' name=sub_name,type=CephString'
+                   ' name=group_name,type=CephString,req=false',
+            'desc': "Get dmclock QoS settings in effect for a subvolume",
+            'perm': 'r'
         },
         {
             'cmd': 'fs subvolume snapshot protect '
@@ -996,6 +1050,24 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
                                                    group_name=cmd['group_name'])
 
     @mgr_cmd_wrap
+    def _cmd_fs_subvolumegroup_qos_set(self, inbuf, cmd):
+        return self.vc.subvolume_group_qos_set(vol_name=cmd['vol_name'],
+                                               group_name=cmd['group_name'],
+                                               reservation=cmd['reservation'],
+                                               weight=cmd['weight'],
+                                               limit=cmd['limit'])
+
+    @mgr_cmd_wrap
+    def _cmd_fs_subvolumegroup_qos_rm(self, inbuf, cmd):
+        return self.vc.subvolume_group_qos_rm(vol_name=cmd['vol_name'],
+                                              group_name=cmd['group_name'])
+
+    @mgr_cmd_wrap
+    def _cmd_fs_subvolumegroup_qos_get(self, inbuf, cmd):
+        return self.vc.subvolume_group_qos_get(vol_name=cmd['vol_name'],
+                                               group_name=cmd['group_name'])
+
+    @mgr_cmd_wrap
     def _cmd_fs_subvolumegroup_charmap_get(self, inbuf, cmd):
         return self.vc.subvolume_group_charmap_get(vol_name=cmd['vol_name'],
                                                    group_name=cmd['group_name'],
@@ -1120,6 +1192,27 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
                                              sub_name=cmd['sub_name'],
                                              setting=cmd.get('setting', 'charmap'),
                                              group_name=cmd.get('group_name', None))
+
+    @mgr_cmd_wrap
+    def _cmd_fs_subvolume_qos_set(self, inbuf, cmd):
+        return self.vc.subvolume_qos_set(vol_name=cmd['vol_name'],
+                                         sub_name=cmd['sub_name'],
+                                         reservation=cmd['reservation'],
+                                         weight=cmd['weight'],
+                                         limit=cmd['limit'],
+                                         group_name=cmd.get('group_name', None))
+
+    @mgr_cmd_wrap
+    def _cmd_fs_subvolume_qos_rm(self, inbuf, cmd):
+        return self.vc.subvolume_qos_rm(vol_name=cmd['vol_name'],
+                                        sub_name=cmd['sub_name'],
+                                        group_name=cmd.get('group_name', None))
+
+    @mgr_cmd_wrap
+    def _cmd_fs_subvolume_qos_get(self, inbuf, cmd):
+        return self.vc.subvolume_qos_get(vol_name=cmd['vol_name'],
+                                         sub_name=cmd['sub_name'],
+                                         group_name=cmd.get('group_name', None))
 
     @mgr_cmd_wrap
     def _cmd_fs_subvolume_snapshot_protect(self, inbuf, cmd):
