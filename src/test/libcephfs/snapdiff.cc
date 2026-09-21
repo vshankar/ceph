@@ -225,6 +225,21 @@ public:
     ceph_close(cmount, fd);
     return r;
   }
+  // Unlike write_full(), these hand the descriptor back so a caller can keep it
+  // open: caps_wanted() retains Fw for as long as it is held.
+  int open_write(const char* relpath)
+  {
+    auto file_path = make_file_path(relpath);
+    return ceph_open(cmount, file_path.c_str(), O_WRONLY | O_CREAT, 0666);
+  }
+  int write_fd(int fd, const string& data, int64_t offset = 0)
+  {
+    return ceph_write(cmount, fd, data.c_str(), data.size(), offset);
+  }
+  int close_fd(int fd)
+  {
+    return ceph_close(cmount, fd);
+  }
   void generate_random_string_n(uint64_t count, uint64_t block_size,
 				const std::function<void(const std::string&)> &f)
   {
@@ -2444,4 +2459,73 @@ TEST(LibCephFS, SnapDiffStatDelta) {
 
   test_mount.rmsnap("snap1");
   test_mount.rmsnap("snap2");
+}
+
+/*
+ * readdir_snapdiff must complete while the client still holds write caps.
+ *
+ * An open-for-write descriptor keeps Fw in caps_wanted(), so the MDS re-grants
+ * EXCL as soon as any rdlock taken on the file is released. Any predicate
+ * gating rdlock_file_start() in build_snap_diff() therefore has to be one that
+ * the flush it forces actually clears -- a predicate keyed on steady-state cap
+ * ownership never converges. The walk blocks, _readdir_diff() discards the
+ * partial reply, the retry restarts from the client's offset, and the files
+ * behind it have already reverted to EXCL.
+ *
+ * NOTE: a regression here HANGS rather than fails. gtest has no per-test
+ * timeout, and an in-process watchdog would have to block on the same stuck
+ * call, so if this test stops producing output that is the failure. Confirm by
+ * looking for repeated "rdlock_start waiting on" against the same inodes in the
+ * MDS log.
+ */
+TEST(LibCephFS, SnapDiffWithOpenWriteFds)
+{
+  TestMount test_mount("snapdiff_open_write_fds");
+
+  ASSERT_LE(0, test_mount.write_full("fileA", "v1"));
+  ASSERT_LE(0, test_mount.write_full("fileB", "v1"));
+  ASSERT_LE(0, test_mount.write_full("fileC", "never modified"));
+  ASSERT_EQ(0, test_mount.mksnap("snap1"));
+
+  ASSERT_LE(0, test_mount.write_full("fileA", "v2"));
+  ASSERT_LE(0, test_mount.write_full("fileB", "v2"));
+  ASSERT_EQ(0, test_mount.mksnap("snap2"));
+
+  uint64_t snapid2;
+  ASSERT_EQ(0, test_mount.get_snapid("snap2", &snapid2));
+
+  // Held across the diff on purpose; not closed until it has returned. The
+  // writes make the cap state unambiguous -- Fw and Fb in use, not just wanted.
+  int fdA = test_mount.open_write("fileA");
+  int fdB = test_mount.open_write("fileB");
+  ASSERT_LE(0, fdA);
+  ASSERT_LE(0, fdB);
+  ASSERT_LT(0, test_mount.write_fd(fdA, "still writing"));
+  ASSERT_LT(0, test_mount.write_fd(fdB, "still writing"));
+
+  vector<pair<string, uint64_t>> diff;
+  ASSERT_EQ(0, test_mount.for_each_readdir_snapdiff(
+    "", "snap1", "snap2",
+    [&](const dirent* dire, uint64_t snapid) {
+      diff.emplace_back(dire->d_name, snapid);
+      return true;
+    }));
+
+  auto changed = [&](const char* name) {
+    return std::find(diff.begin(), diff.end(),
+                     std::make_pair(string(name), snapid2)) != diff.end();
+  };
+  EXPECT_TRUE(changed("fileA"));
+  EXPECT_TRUE(changed("fileB"));
+  EXPECT_EQ(diff.end(),
+            std::find_if(diff.begin(), diff.end(),
+                         [](const pair<string, uint64_t>& e) {
+                           return e.first == "fileC";
+                         }));
+
+  ASSERT_EQ(0, test_mount.close_fd(fdA));
+  ASSERT_EQ(0, test_mount.close_fd(fdB));
+  ASSERT_EQ(0, test_mount.purge_dir(""));
+  ASSERT_EQ(0, test_mount.rmsnap("snap1"));
+  ASSERT_EQ(0, test_mount.rmsnap("snap2"));
 }
