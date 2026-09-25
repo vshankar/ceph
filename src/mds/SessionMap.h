@@ -778,6 +778,13 @@ public:
    */
   void save_if_dirty(const std::set<entity_name_t> &tgt_sessions,
                      MDSGatherBuilder *gather_bld);
+  /*
+   * How many of tgt_sessions save_if_dirty() would write out.  Kept beside
+   * it so the two cannot drift.  Used by the log segment expiry diagnostics,
+   * which must not have side effects, so this stops at the cheap filters and
+   * does not attempt the encode-and-blocklist step.
+   */
+  size_t count_dirty_for_save(const std::set<entity_name_t> &tgt_sessions) const;
 
   void hit_session(Session *session);
   void handle_conf_change(const std::set <std::string> &changed);

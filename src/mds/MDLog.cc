@@ -22,6 +22,8 @@
 #include "osdc/Journaler.h"
 #include "mds/JournalPointer.h"
 
+#include "common/Clock.h" // for ceph_clock_now()
+#include "common/Formatter.h"
 #include "common/debug.h"
 #include "common/entity_name.h"
 #include "common/perf_counters.h"
@@ -35,6 +37,7 @@
 #include "common/config.h"
 #include "common/errno.h"
 #include "include/ceph_assert.h"
+#include "include/stringify.h"
 
 #define dout_context g_ceph_context
 #define dout_subsys ceph_subsys_mds
@@ -704,6 +707,151 @@ bool MDLog::is_trim_slow() const {
   return (segments.size() > (size_t)(max_segments * log_warn_factor));
 }
 
+/*
+ * "dump log segments": explain why the journal is not being trimmed.
+ *
+ * With no seq and !all this reports the oldest unexpired segment (the one
+ * _trim_expired_segments() breaks on, which is what actually pins
+ * expire_pos) plus a rollup of everything currently mid-gather.  The latter
+ * matters because when many segments are stuck in expiring_segments,
+ * trim()'s ceiling check makes it stop initiating work entirely, and the
+ * head-of-line segment is then only part of the story.
+ *
+ * Note the oldest unexpired segment is frequently the current one: _expired()
+ * will not expire a segment that is still being written to.  That is the
+ * fully-trimmed state, not a stall, and the segment's "note" says so.
+ */
+/*
+ * Summarise, for the MDS_TRIM health metric, why trimming is stuck.  Reports
+ * on the head-of-line segment -- the one _trim_expired_segments() breaks on
+ * -- because that is what actually pins expire_pos, and therefore what an
+ * operator has to fix.
+ */
+MDLog::trim_blocker_info_t MDLog::get_trim_blocker_info()
+{
+  ceph_assert(ceph_mutex_is_locked_by_me(mds->mds_lock));
+  std::lock_guard l(submit_mutex);
+
+  trim_blocker_info_t info;
+
+  auto ls = get_first_unexpired_segment();
+  if (!ls) {
+    return info;                // no segments at all
+  }
+
+  info.have_segment = true;
+  info.seq = ls->seq;
+  info.is_current = is_current_segment(ls->seq);
+  info.expiring = expiring_segments.count(ls) > 0;
+  info.expiry_attempts = ls->expiry_attempts;
+  if (ls->expiry_attempts) {
+    info.blocked_for = (double)(ceph_clock_now() - ls->first_expiry_attempt);
+  }
+
+  LogSegment::expiry_obligations_t obligations;
+  ls->count_expiry_obligations(mds, obligations);
+  info.num_categories = obligations.num_categories();
+
+  /*
+   * Two renderings: "summary" is for the human-readable message and is
+   * capped, "categories" is for health metadata.  Metadata values are
+   * flattened into a comma-separated detail line by the mon, so join those
+   * with '+' rather than ',' to keep the result parseable.
+   */
+  unsigned shown = 0;
+  for (int i = 0; i < LogSegment::EXPIRY_NUM_OBLIGATIONS; ++i) {
+    if (!obligations.count[i]) {
+      continue;
+    }
+    auto name = LogSegment::get_expiry_obligation_name(i);
+    if (!info.categories.empty()) {
+      info.categories += "+";
+    }
+    info.categories += name;
+
+    if (shown < 3) {
+      if (!info.summary.empty()) {
+        info.summary += ", ";
+      }
+      info.summary += std::string(name) + "(" + stringify(obligations.count[i]) + ")";
+      ++shown;
+    } else if (shown == 3) {
+      info.summary += ", ...";
+      ++shown;
+    }
+  }
+
+  return info;
+}
+
+void MDLog::dump_segments(ceph::Formatter *f, std::optional<LogSegment::seq_t> seq,
+                          bool all, bool detail)
+{
+  ceph_assert(ceph_mutex_is_locked_by_me(mds->mds_lock));
+  std::lock_guard l(submit_mutex);
+
+  f->open_object_section("log_segments");
+
+  f->dump_unsigned("num_segments", segments.size());
+  f->dump_unsigned("num_expiring", expiring_segments.size());
+  f->dump_unsigned("num_expired", expired_segments.size());
+  f->dump_unsigned("num_major_segments", major_segments.size());
+  f->dump_unsigned("max_segments", max_segments);
+  f->dump_float("warn_factor", log_warn_factor);
+  f->dump_bool("trim_slow", is_trim_slow());
+  f->dump_unsigned("num_events", num_events);
+  f->dump_unsigned("expire_pos", journaler ? journaler->get_expire_pos() : 0);
+  f->dump_unsigned("write_pos", journaler ? journaler->get_write_pos() : 0);
+  f->dump_unsigned("safe_pos", safe_pos);
+  f->dump_unsigned("minor_segments_per_major_segment", minor_segments_per_major_segment);
+
+  if (seq) {
+    auto it = segments.find(*seq);
+    f->open_object_section("segment");
+    if (it == segments.end()) {
+      f->dump_string("error", "no such segment");
+      f->dump_unsigned("requested_seq", *seq);
+    } else {
+      it->second->dump(f, mds, detail);
+    }
+    f->close_section();
+  } else if (all) {
+    f->open_array_section("segments");
+    for (auto& p : segments) {
+      f->open_object_section("segment");
+      p.second->dump(f, mds, detail);
+      f->close_section();
+    }
+    f->close_section();
+  } else {
+    f->open_object_section("oldest_unexpired_segment");
+    if (auto ls = get_first_unexpired_segment(); ls) {
+      ls->dump(f, mds, detail);
+    } else {
+      f->dump_string("note", "the journal has no segments");
+    }
+    f->close_section();
+
+    /*
+     * Rollup of segments mid-gather.  Never detailed -- ask for a specific
+     * seq if you want the objects.
+     */
+    f->open_array_section("expiring");
+    for (auto& p : segments) {
+      if (!expiring_segments.count(p.second)) {
+        continue;
+      }
+      f->open_object_section("segment");
+      p.second->dump(f, mds, false);
+      f->close_section();
+    }
+    f->close_section();
+  }
+
+  f->close_section();
+}
+
+
 void MDLog::log_trim_upkeep(void) {
   ceph_pthread_setname("mds-log-trim");
 
@@ -911,6 +1059,20 @@ void MDLog::try_expire(LogSegmentRef const& ls, int op_prio)
   ceph_assert(ceph_mutex_is_locked(mds->mds_lock));
   MDSGatherBuilder gather_bld(g_ceph_context);
   ls->try_to_expire(mds, gather_bld, op_prio);
+
+  /*
+   * Record the attempt for "dump log segments".  The obligation lists say
+   * what is outstanding now, but not how long it has been outstanding, and
+   * that is usually the operator's first question.  num_subs_created() must
+   * be read before activate().
+   */
+  utime_t now = ceph_clock_now();
+  if (!ls->expiry_attempts) {
+    ls->first_expiry_attempt = now;
+  }
+  ls->expiry_attempts++;
+  ls->last_expiry_attempt = now;
+  ls->last_expiry_subs = gather_bld.num_subs_created();
 
   if (gather_bld.has_subs()) {
     dout(5) << "try_expire expiring " << *ls << dendl;

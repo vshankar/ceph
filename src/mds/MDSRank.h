@@ -537,6 +537,7 @@ class MDSRank {
         const cmdmap_t &cmdmap,
         std::ostream &ss);
     void command_openfiles_ls(Formatter *f);
+    void command_dump_log_segments(Formatter *f, const cmdmap_t &cmdmap);
     void command_dump_tree(const cmdmap_t &cmdmap, std::ostream &ss, Formatter *f);
     void command_quiesce_path(Formatter *f, const cmdmap_t &cmdmap, asok_finisher on_finish);
     void command_lock_path(Formatter* f, const cmdmap_t& cmdmap, asok_finisher on_finish);

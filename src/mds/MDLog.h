@@ -56,9 +56,12 @@ enum {
 #include <atomic>
 #include <list>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
+
+namespace ceph { class Formatter; }
 
 struct EstimatedReplayTime;
 class Journaler;
@@ -108,6 +111,75 @@ public:
   bool have_any_segments() const {
     return !segments.empty();
   }
+
+  bool is_segment_expiring(LogSegment::seq_t seq) const {
+    auto it = segments.find(seq);
+    return it != segments.end() && expiring_segments.count(it->second);
+  }
+  bool is_segment_expired(LogSegment::seq_t seq) const {
+    auto it = segments.find(seq);
+    return it != segments.end() && expired_segments.count(it->second);
+  }
+  bool is_major_segment(LogSegment::seq_t seq) const {
+    return major_segments.count(seq);
+  }
+
+  /*
+   * Is this segment fully flushed, as trim() judges it?  Uses MDLog's
+   * cached safe_pos rather than asking the Journaler: that avoids taking
+   * the Journaler lock under submit_mutex, and it makes the answer agree
+   * with the test trim() itself applies before trying to expire.
+   */
+  bool is_segment_flushed(const LogSegment& ls) const {
+    return !pending_events.count(ls.seq) && ls.end <= safe_pos;
+  }
+
+  bool is_current_segment(LogSegment::seq_t seq) const {
+    return !segments.empty() && segments.rbegin()->first == seq;
+  }
+
+  /*
+   * The segment _trim_expired_segments() breaks on: the oldest one not yet
+   * expired.  This -- not segments.begin() -- is what holds expire_pos, and
+   * therefore removal, in place.
+   *
+   * Deliberately not called "blocking": being unexpired is not the same as
+   * being stuck.  It may be untouched (trim() never asked), and it may be
+   * the current segment, which _expired() refuses to expire while it is
+   * still being written to -- in which case expire_pos resting at its start
+   * means the journal is trimmed as far as it can be.  Null only when the
+   * journal has no segments at all.
+   */
+  LogSegmentRef get_first_unexpired_segment() const {
+    static LogSegmentRef const nullsegment = nullptr;
+    for (const auto& p : segments) {
+      if (!expired_segments.count(p.second)) {
+        return p.second;
+      }
+    }
+    return nullsegment;
+  }
+
+  void dump_segments(ceph::Formatter *f, std::optional<LogSegment::seq_t> seq,
+                     bool all, bool detail);
+
+  /*
+   * Formatter-free summary of what is holding trimming back, for the
+   * MDS_TRIM health metric.  Cheap enough to compute on the beacon path:
+   * it walks one segment's obligation lists, not the whole journal.
+   */
+  struct trim_blocker_info_t {
+    bool have_segment = false;      // false => the journal has no segments
+    LogSegment::seq_t seq = 0;
+    bool is_current = false;        // the segment still being written to
+    bool expiring = false;
+    unsigned expiry_attempts = 0;
+    double blocked_for = 0.0;       // seconds since the first expiry attempt
+    unsigned num_categories = 0;
+    std::string summary;            // e.g. "dirty_dirfrag_dir(1), open_file_table(1)"
+    std::string categories;         // e.g. "dirty_dirfrag_dir+open_file_table"
+  };
+  trim_blocker_info_t get_trim_blocker_info();
 
   void flush_logger();
 

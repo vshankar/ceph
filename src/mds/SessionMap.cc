@@ -914,6 +914,25 @@ public:
 }
 
 
+size_t SessionMap::count_dirty_for_save(const std::set<entity_name_t> &tgt_sessions) const
+{
+  size_t n = 0;
+  for (const auto &session_id : tgt_sessions) {
+    auto it = session_map.find(session_id);
+    if (it == session_map.end()) {
+      continue;                 // session isn't around any more
+    }
+    if (!it->second->has_dirty_completed_requests()) {
+      continue;                 // nothing new to write
+    }
+    if (dirty_sessions.count(session_id) > 0) {
+      continue;                 // the ordinary save already covers it
+    }
+    ++n;
+  }
+  return n;
+}
+
 void SessionMap::save_if_dirty(const std::set<entity_name_t> &tgt_sessions,
                                MDSGatherBuilder *gather_bld)
 {

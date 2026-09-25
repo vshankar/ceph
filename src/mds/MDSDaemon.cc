@@ -528,6 +528,14 @@ void MDSDaemon::set_up_admin_socket()
                                      asok_hook,
                                      "List the opening files and their caps");
   ceph_assert(r == 0);
+  r = admin_socket->register_command("dump log segments "
+                                     "name=seq,type=CephInt,range=0,req=false "
+                                     "name=all,type=CephBool,req=false "
+                                     "name=detail,type=CephBool,req=false",
+                                     asok_hook,
+                                     "show why mds log segments cannot be expired; "
+                                     "with no argument, report the segment blocking trimming");
+  ceph_assert(r == 0);
   r = admin_socket->register_command("dump inode "
                                      "name=number,type=CephInt,req=true",
 				     asok_hook,

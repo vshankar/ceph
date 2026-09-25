@@ -331,12 +331,65 @@ void Beacon::notify_health(MDSRank const *mds)
     if (mds->mdlog->is_trim_slow()) {
       auto num_segments = mds->mdlog->get_num_segments();
       auto max_segments = mds->mdlog->get_max_segments();
+
+      /*
+       * Say *why*, not just how far behind.  The count alone cannot
+       * distinguish "a segment is wedged on a client that will not release
+       * caps" from "expiry is healthy and removal is merely waiting for the
+       * next major segment boundary", and those need completely different
+       * responses from an operator.
+       */
+      auto info = mds->mdlog->get_trim_blocker_info();
+
+      /*
+       * "Behind on trimming (N/M)" must stay the literal prefix: qa
+       * log-ignorelist entries and MDSMonitor's detail-line consumers match
+       * on it.  Everything else is appended.  Note the message is copied by
+       * the MDSHealthMetric constructor, so build it all before constructing.
+       */
       CachedStackStringStream css;
       *css << "Behind on trimming (" << num_segments << "/" << max_segments << ")";
+
+      if (!info.have_segment) {
+        *css << "; the journal has no segments";
+      } else if (info.is_current) {
+        /*
+         * The oldest unexpired segment is the one still being written to, so
+         * everything older has expired and the backlog is expired-but-not-yet
+         * -removed.  That is a major-segment quantisation problem, not a stall.
+         */
+        *css << "; all older segments have expired, removal pending next major segment";
+      } else {
+        *css << "; oldest unexpired segment " << info.seq;
+        if (info.num_categories) {
+          if (info.expiry_attempts) {
+            *css << " blocked " << (uint64_t)info.blocked_for << "s on ";
+          } else {
+            *css << " blocked on ";
+          }
+          *css << info.summary;
+        } else {
+          *css << " has no outstanding obligations";
+        }
+      }
 
       MDSHealthMetric m(MDS_HEALTH_TRIM, HEALTH_WARN, css->strv());
       m.metadata["num_segments"] = stringify(num_segments);
       m.metadata["max_segments"] = stringify(max_segments);
+      if (info.have_segment) {
+        m.metadata["oldest_unexpired_seq"] = stringify(info.seq);
+        m.metadata["oldest_unexpired_state"] =
+          info.is_current ? "current" : (info.expiring ? "expiring" : "untouched");
+        m.metadata["oldest_unexpired_attempts"] = stringify(info.expiry_attempts);
+        if (info.num_categories && !info.is_current) {
+          if (info.expiry_attempts) {
+            m.metadata["oldest_unexpired_age"] = stringify((uint64_t)info.blocked_for);
+          }
+          // '+'-joined: the mon flattens metadata into one comma-separated
+          // detail line, so a ','-joined value would not be parseable there.
+          m.metadata["blockers"] = info.categories;
+        }
+      }
       health.metrics.push_back(m);
     }
   }

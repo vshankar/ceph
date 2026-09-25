@@ -3097,6 +3097,8 @@ void MDSRankDispatcher::handle_asok_command(
     command_dirfrag_ls(cmdmap, *css, f);
   } else if (command == "openfiles ls") {
     command_openfiles_ls(f);
+  } else if (command == "dump log segments") {
+    command_dump_log_segments(f, cmdmap);
   } else if (command == "dump inode") {
     command_dump_inode(f, cmdmap, *css);
   } else if (command == "dump dir") {
@@ -3523,6 +3525,21 @@ void MDSRank::command_openfiles_ls(Formatter *f)
 {
   std::lock_guard l(mds_lock);
   mdcache->dump_openfiles(f);
+}
+
+void MDSRank::command_dump_log_segments(Formatter *f, const cmdmap_t &cmdmap)
+{
+  int64_t seq = -1;
+  bool have_seq = cmd_getval(cmdmap, "seq", seq);
+  bool all = false;
+  cmd_getval(cmdmap, "all", all);
+  bool detail = false;
+  cmd_getval(cmdmap, "detail", detail);
+
+  std::lock_guard l(mds_lock);
+  mdlog->dump_segments(f,
+                       have_seq ? std::optional<LogSegment::seq_t>(seq) : std::nullopt,
+                       all, detail);
 }
 
 class C_MDS_QuiescePathCommand : public MDCache::C_MDS_QuiescePath {

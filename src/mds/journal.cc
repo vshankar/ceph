@@ -13,6 +13,7 @@
  * 
  */
 
+#include "common/Clock.h" // for ceph_clock_now()
 #include "common/config.h"
 #include "common/debug.h"
 #include "osdc/Journaler.h"
@@ -381,6 +382,765 @@ void LogSegment::purge_inodes_finish(interval_set<inodeno_t>& inos){
   if (NULL != purged_cb &&
       purging_inodes.empty())
     purged_cb->complete(0);
+}
+
+// -- expiry diagnostics ----------------------------------------------------
+//
+// dump_expiry_obligations() answers "what does this segment still owe before
+// it can be expired?".  It lives immediately below try_to_expire() on
+// purpose: it must enumerate the same conditions, so if you add a gather sub
+// up there, add a counterpart down here.
+//
+// It is side-effect free, and it can afford to be, because every obligation
+// list on a LogSegment is self-clearing -- an object unlinks itself once its
+// obligation is discharged.  So what is still linked is what is still owed.
+//
+// These are obligations, not necessarily blockers.  The lists are populated
+// when events are journaled -- MutationImpl::apply() and
+// LogEvent::update_segment() -- never by try_to_expire(), which only
+// consumes them.  A segment therefore carries obligations from birth, and a
+// freshly written segment reporting several of them is the normal steady
+// state rather than a stall.
+
+namespace {
+
+/*
+ * Bound on how many objects we name per obligation category in detail mode.
+ * A wedged segment can reference many thousands of dirty inodes; an operator
+ * needs a representative sample, not a cache dump.
+ */
+constexpr unsigned EXPIRY_DETAIL_MAX = 16;
+
+/*
+ * Why can_auth_pin() refused.  try_to_expire() parks on WAIT_UNFREEZE for
+ * exactly this, for both dirfrag commits and backtrace stores.
+ */
+const char *auth_pin_block_reason(const MDSCacheObject *o)
+{
+  int err = 0;
+  if (o->can_auth_pin(&err)) {
+    return nullptr;
+  }
+  switch (err) {
+  case MDSCacheObject::ERR_NOT_AUTH:        return "not_auth";
+  case MDSCacheObject::ERR_EXPORTING_TREE:  return "exporting_tree";
+  case MDSCacheObject::ERR_FRAGMENTING_DIR: return "fragmenting_dir";
+  case MDSCacheObject::ERR_EXPORTING_INODE: return "exporting_inode";
+  default:                                  return "cannot_auth_pin";
+  }
+}
+
+/*
+ * Why Locker::scatter_nudge() would not drive this lock forward.  Mirrors
+ * its bail-outs in the order it tests them; nullptr means the nudge would
+ * proceed, so the item is progressing rather than stuck.
+ */
+const char *scatter_nudge_block_reason(CInode *in, const SimpleLock *lock)
+{
+  if (!lock) {
+    return nullptr;
+  }
+  if (in->is_frozen() || in->is_freezing()) {
+    return "frozen";                    // waits on WAIT_UNFREEZE
+  }
+  if (in->is_ambiguous_auth()) {
+    return "ambiguous_auth";            // waits on WAIT_SINGLEAUTH
+  }
+  if (!in->is_auth()) {
+    return "not_auth";                  // LOCK_AC_NUDGE sent, waits WAIT_STABLE
+  }
+  if (!lock->is_stable()) {
+    return "lock_unstable";             // mid gather, waits WAIT_STABLE
+  }
+  return nullptr;
+}
+
+void dump_blocking_lock(ceph::Formatter *f, std::string_view name,
+                        const SimpleLock& lock)
+{
+  f->open_object_section(name);
+  f->dump_string("type", SimpleLock::get_lock_type_name(lock.get_type()));
+  f->dump_string("state", SimpleLock::get_state_name(lock.get_state()));
+  f->dump_bool("stable", lock.is_stable());
+  f->dump_bool("dirty", lock.is_dirty());
+  f->dump_bool("flushing", lock.is_flushing());
+  f->dump_int("num_rdlocks", lock.get_num_rdlocks());
+  f->dump_int("num_wrlocks", lock.get_num_wrlocks());
+  f->dump_int("num_xlocks", lock.get_num_xlocks());
+  f->open_array_section("gather_set");
+  for (const auto& i : lock.get_gather_set()) {
+    f->dump_int("rank", i);
+  }
+  f->close_section();
+  f->close_section();
+}
+
+/*
+ * For a cap-bearing lock that is mid-gather, name the clients we are still
+ * waiting on.  pending vs issued is precisely the outstanding set, so this
+ * is the bit that otherwise costs an operator a debug_mds=10 session.
+ */
+void dump_outstanding_caps(ceph::Formatter *f, CInode *in, const SimpleLock& lock)
+{
+  int shift = lock.get_cap_shift();
+  if (!shift) {
+    return;                     // nestlock/dirfragtreelock: never cap-gated
+  }
+  int mask = lock.get_cap_mask();
+  utime_t now = ceph_clock_now();
+
+  f->open_array_section("caps_outstanding");
+  for (const auto& p : in->get_client_caps()) {
+    const Capability& cap = p.second;
+    int pending = (cap.pending() >> shift) & mask;
+    int issued = (cap.issued() >> shift) & mask;
+    if (issued == pending) {
+      continue;                 // this client owes us nothing
+    }
+    f->open_object_section("client");
+    f->dump_int("client", p.first.v);
+    f->dump_string("pending", ccap_string(cap.pending()));
+    f->dump_string("issued", ccap_string(cap.issued()));
+    f->dump_string("wanted", ccap_string(cap.wanted()));
+    f->dump_string("outstanding", gcap_string(issued & ~pending));
+    utime_t stamp = cap.get_last_revoke_stamp();
+    if (stamp != utime_t()) {
+      f->dump_float("revoke_age", (double)(now - stamp));
+    }
+    f->close_section();
+  }
+  f->close_section();
+}
+
+void dump_blocking_inode(ceph::Formatter *f, CInode *in, const SimpleLock *lock,
+                         const char *blocked_on)
+{
+  f->open_object_section("inode");
+  if (blocked_on) {
+    f->dump_string("blocked_on", blocked_on);
+  }
+  f->dump_stream("ino") << in->ino();
+  {
+    std::string path;
+    in->make_path_string(path, true);
+    f->dump_string("path", path);
+  }
+  f->dump_bool("is_dir", in->is_dir());
+  f->dump_bool("is_auth", in->is_auth());
+  f->dump_bool("is_frozen", in->is_frozen());
+  f->dump_bool("is_freezing", in->is_freezing());
+  f->dump_bool("is_ambiguous_auth", in->is_ambiguous_auth());
+  f->dump_bool("can_auth_pin", in->can_auth_pin());
+  if (lock) {
+    dump_blocking_lock(f, "lock", *lock);
+    dump_outstanding_caps(f, in, *lock);
+  }
+  f->close_section();
+}
+
+void dump_blocking_dirfrag(ceph::Formatter *f, CDir *dir, const char *blocked_on)
+{
+  f->open_object_section("dirfrag");
+  if (blocked_on) {
+    f->dump_string("blocked_on", blocked_on);
+  }
+  f->dump_stream("dirfrag") << dir->dirfrag();
+  {
+    /*
+     * CDir::get_path() is private; the directory inode's path plus the
+     * dirfrag_t printed above identify the fragment just as well.
+     */
+    std::string path;
+    dir->get_inode()->make_path_string(path, true);
+    f->dump_string("path", path);
+  }
+  f->dump_bool("is_auth", dir->is_auth());
+  f->dump_bool("is_frozen", dir->is_frozen());
+  f->dump_bool("is_freezing", dir->is_freezing());
+  f->dump_bool("can_auth_pin", dir->can_auth_pin());
+  f->dump_unsigned("version", dir->get_version());
+  f->dump_unsigned("committed_version", dir->get_committed_version());
+  f->close_section();
+}
+
+/*
+ * Walk an elist of CInode*, counting entries that satisfy pred and reporting
+ * via *blocked how many of them cannot currently proceed.
+ *
+ * When dumping, blocked entries are emitted FIRST and only then are the
+ * remaining slots filled with entries that are progressing.  try_to_expire()
+ * issues work for every entry and the gather waits on all of them, so the
+ * one stuck entry is the answer and the EXPIRY_DETAIL_MAX cap must never be
+ * what hides it.  Selecting in elist order would do exactly that.
+ *
+ * Pass a null LockOf to omit lock/cap detail; such categories have no
+ * per-entry stuck predicate and report blocked == 0.
+ */
+template<typename Pred, typename LockOf, typename WhyFn>
+unsigned walk_blocking_inodes(ceph::Formatter *f, elist<CInode*>& ls,
+                              size_t item_offset, bool dump,
+                              Pred pred, LockOf lock_of, WhyFn why_fn,
+                              unsigned *blocked)
+{
+  unsigned n = 0;
+  unsigned nblocked = 0;
+  unsigned dumped = 0;
+
+  for (auto p = ls.begin(item_offset); !p.end(); ++p) {
+    CInode *in = *p;
+    if (!pred(in)) {
+      continue;
+    }
+    ++n;
+    const char *why = why_fn(in, lock_of(in));
+    if (!why) {
+      continue;
+    }
+    ++nblocked;
+    if (dump && dumped < EXPIRY_DETAIL_MAX) {
+      dump_blocking_inode(f, in, lock_of(in), why);
+      ++dumped;
+    }
+  }
+
+  if (dump && dumped < EXPIRY_DETAIL_MAX) {
+    for (auto p = ls.begin(item_offset); !p.end() && dumped < EXPIRY_DETAIL_MAX; ++p) {
+      CInode *in = *p;
+      if (!pred(in) || why_fn(in, lock_of(in))) {
+        continue;               // already emitted above
+      }
+      dump_blocking_inode(f, in, lock_of(in), nullptr);
+      ++dumped;
+    }
+  }
+
+  if (blocked) {
+    *blocked = nblocked;
+  }
+  return n;
+}
+
+auto always_true = [](CInode*) { return true; };
+auto no_lock = [](CInode*) -> const SimpleLock* { return nullptr; };
+
+auto filelock_of = [](CInode *in) -> const SimpleLock* { return &in->filelock; };
+auto dftlock_of  = [](CInode *in) -> const SimpleLock* { return &in->dirfragtreelock; };
+auto nestlock_of = [](CInode *in) -> const SimpleLock* { return &in->nestlock; };
+
+auto why_scatter = [](CInode *in, const SimpleLock *l) {
+  return scatter_nudge_block_reason(in, l);
+};
+auto why_auth_pin = [](CInode *in, const SimpleLock *) {
+  return auth_pin_block_reason(in);
+};
+auto why_none = [](CInode *, const SimpleLock *) -> const char * {
+  return nullptr;
+};
+
+/*
+ * Only snap inodes still needing a flush actually re-journal; regular open
+ * files are dropped from LogSegment::open_files by try_to_expire() because
+ * the open file table tracks them.  Match that filter, so we never report
+ * an obligation that would in fact clear itself on the next attempt.
+ */
+auto needs_snapflush = [](CInode *in) {
+  return in->last != CEPH_NOSNAP && in->is_auth() && !in->client_snap_caps.empty();
+};
+
+} // anonymous namespace
+
+std::string_view LogSegment::get_expiry_obligation_name(int obligation)
+{
+  switch (obligation) {
+  case EXPIRY_DIRTY_DIRFRAGS:            return "dirty_dirfrags";
+  case EXPIRY_UNCOMMITTED_LEADERS:       return "uncommitted_leaders";
+  case EXPIRY_UNCOMMITTED_PEERS:         return "uncommitted_peers";
+  case EXPIRY_UNCOMMITTED_FRAGMENTS:     return "uncommitted_fragments";
+  case EXPIRY_DIRTY_DIRFRAG_DIR:         return "dirty_dirfrag_dir";
+  case EXPIRY_DIRTY_DIRFRAG_DIRFRAGTREE: return "dirty_dirfrag_dirfragtree";
+  case EXPIRY_DIRTY_DIRFRAG_NEST:        return "dirty_dirfrag_nest";
+  case EXPIRY_OPEN_FILES:                return "open_files";
+  case EXPIRY_OPEN_FILE_TABLE:           return "open_file_table";
+  case EXPIRY_DIRTY_PARENT_INODES:       return "dirty_parent_inodes";
+  case EXPIRY_INOTABLE:                  return "inotable";
+  case EXPIRY_SESSIONMAP:                return "sessionmap";
+  case EXPIRY_TOUCHED_SESSIONS:          return "touched_sessions";
+  case EXPIRY_MDSTABLE_CLIENT:           return "mdstable_client";
+  case EXPIRY_MDSTABLE_SERVER:           return "mdstable_server";
+  case EXPIRY_TRUNCATING_INODES:         return "truncating_inodes";
+  case EXPIRY_PURGING_INODES:            return "purging_inodes";
+  default:                               return "unknown";
+  }
+}
+
+/*
+ * Human-readable cause, phrased to match the corresponding dout() in
+ * try_to_expire() so an operator can grep the MDS log for the same words.
+ */
+std::string_view LogSegment::get_expiry_obligation_reason(int obligation)
+{
+  switch (obligation) {
+  case EXPIRY_DIRTY_DIRFRAGS:
+    return "waiting for dirfrags to commit";
+  case EXPIRY_UNCOMMITTED_LEADERS:
+    return "waiting for peers to ack commit";
+  case EXPIRY_UNCOMMITTED_PEERS:
+    return "waiting for leader to ack OP_FINISH";
+  case EXPIRY_UNCOMMITTED_FRAGMENTS:
+    return "waiting for uncommitted fragment";
+  case EXPIRY_DIRTY_DIRFRAG_DIR:
+    return "waiting for dirlock flush (may be waiting on client cap release)";
+  case EXPIRY_DIRTY_DIRFRAG_DIRFRAGTREE:
+    return "waiting for dirfragtreelock flush";
+  case EXPIRY_DIRTY_DIRFRAG_NEST:
+    return "waiting for nest flush";
+  case EXPIRY_OPEN_FILES:
+    return "waiting for open files to rejournal";
+  case EXPIRY_OPEN_FILE_TABLE:
+    return "deferred for oft_committed_seq";
+  case EXPIRY_DIRTY_PARENT_INODES:
+    return "waiting for storing backtrace";
+  case EXPIRY_INOTABLE:
+    return "waiting for inotable to save";
+  case EXPIRY_SESSIONMAP:
+    return "waiting for sessionmap to save";
+  case EXPIRY_TOUCHED_SESSIONS:
+    return "waiting for touched session metadata to be written";
+  case EXPIRY_MDSTABLE_CLIENT:
+    return "waiting for mdstable transaction to be acked";
+  case EXPIRY_MDSTABLE_SERVER:
+    return "waiting for mdstable server to save";
+  case EXPIRY_TRUNCATING_INODES:
+    return "waiting for truncate";
+  case EXPIRY_PURGING_INODES:
+    return "waiting for purge";
+  default:
+    return "unknown";
+  }
+}
+
+/*
+ * Count what is blocking this segment, with no formatter output.  Shared by
+ * "dump log segments" and by the MDS_TRIM health metric, so that the two can
+ * never disagree about why the journal is stuck.
+ */
+void LogSegment::count_expiry_obligations(MDSRank *mds, expiry_obligations_t &out)
+{
+  ceph_assert(ceph_mutex_is_locked_by_me(mds->mds_lock));
+
+  ceph::Formatter *f = nullptr;         // unused: nothing is emitted here
+
+  /*
+   * Four lists fold into one commit set, the way try_to_expire() does, since
+   * committing a dirfrag discharges every obligation pointing at it.  "count"
+   * stays the raw entry total; num_dirfrags_to_commit is the work that will
+   * actually be issued, and blocked is how much of that cannot proceed.
+   */
+  std::set<CDir*> commit;
+  for (auto p = new_dirfrags.begin(member_offset(CDir, item_new)); !p.end(); ++p) {
+    ++out.count[EXPIRY_DIRTY_DIRFRAGS];
+    commit.insert(*p);
+  }
+  for (auto p = dirty_dirfrags.begin(member_offset(CDir, item_dirty)); !p.end(); ++p) {
+    ++out.count[EXPIRY_DIRTY_DIRFRAGS];
+    commit.insert(*p);
+  }
+  for (auto p = dirty_dentries.begin(member_offset(CDentry, item_dirty)); !p.end(); ++p) {
+    ++out.count[EXPIRY_DIRTY_DIRFRAGS];
+    commit.insert((*p)->get_dir());
+  }
+  for (auto p = dirty_inodes.begin(member_offset(CInode, item_dirty)); !p.end(); ++p) {
+    CInode *in = *p;
+    ++out.count[EXPIRY_DIRTY_DIRFRAGS];
+    /* a dirty base inode is stored directly by in->store(), not via a dirfrag */
+    if (!in->is_base() && in->get_parent_dn()) {
+      commit.insert(in->get_parent_dn()->get_dir());
+    }
+  }
+  out.num_dirfrags_to_commit = commit.size();
+  for (auto *dir : commit) {
+    if (auth_pin_block_reason(dir)) {
+      ++out.blocked[EXPIRY_DIRTY_DIRFRAGS];
+    }
+  }
+
+  out.count[EXPIRY_UNCOMMITTED_LEADERS]   = uncommitted_leaders.size();
+  out.count[EXPIRY_UNCOMMITTED_PEERS]     = uncommitted_peers.size();
+  out.count[EXPIRY_UNCOMMITTED_FRAGMENTS] = uncommitted_fragments.size();
+
+  out.count[EXPIRY_DIRTY_DIRFRAG_DIR] =
+    walk_blocking_inodes(f, dirty_dirfrag_dir,
+                         member_offset(CInode, item_dirty_dirfrag_dir), false,
+                         always_true, filelock_of, why_scatter,
+                         &out.blocked[EXPIRY_DIRTY_DIRFRAG_DIR]);
+  out.count[EXPIRY_DIRTY_DIRFRAG_DIRFRAGTREE] =
+    walk_blocking_inodes(f, dirty_dirfrag_dirfragtree,
+                         member_offset(CInode, item_dirty_dirfrag_dirfragtree), false,
+                         always_true, dftlock_of, why_scatter,
+                         &out.blocked[EXPIRY_DIRTY_DIRFRAG_DIRFRAGTREE]);
+  out.count[EXPIRY_DIRTY_DIRFRAG_NEST] =
+    walk_blocking_inodes(f, dirty_dirfrag_nest,
+                         member_offset(CInode, item_dirty_dirfrag_nest), false,
+                         always_true, nestlock_of, why_scatter,
+                         &out.blocked[EXPIRY_DIRTY_DIRFRAG_NEST]);
+
+  out.count[EXPIRY_OPEN_FILES] =
+    walk_blocking_inodes(f, open_files, member_offset(CInode, item_open_file), false,
+                         needs_snapflush, no_lock, why_none,
+                         &out.blocked[EXPIRY_OPEN_FILES]);
+
+  out.oft_committed_log_seq = mds->mdcache->open_file_table.get_committed_log_seq();
+  if (!mds->mdlog->is_capped() && seq >= out.oft_committed_log_seq) {
+    out.count[EXPIRY_OPEN_FILE_TABLE] = 1;
+  }
+
+  out.count[EXPIRY_DIRTY_PARENT_INODES] =
+    walk_blocking_inodes(f, dirty_parent_inodes,
+                         member_offset(CInode, item_dirty_parent), false,
+                         always_true, no_lock, why_auth_pin,
+                         &out.blocked[EXPIRY_DIRTY_PARENT_INODES]);
+
+  if (inotablev > mds->inotable->get_committed_version()) {
+    out.count[EXPIRY_INOTABLE] = 1;
+  }
+  if (sessionmapv > mds->sessionmap.get_committed()) {
+    out.count[EXPIRY_SESSIONMAP] = 1;
+  }
+  /*
+   * try_to_expire() clears touched_sessions as it hands them to
+   * save_if_dirty(), so this is only ever non-zero before the first attempt.
+   * Counted anyway so the enumeration mirrors try_to_expire() completely.
+   */
+  out.count[EXPIRY_TOUCHED_SESSIONS] =
+    mds->sessionmap.count_dirty_for_save(touched_sessions);
+  for (const auto& p : pending_commit_tids) {
+    MDSTableClient *client = mds->get_table_client(p.first);
+    if (!client) {
+      continue;
+    }
+    for (const auto& q : p.second) {
+      if (!client->has_committed(q)) {
+        ++out.count[EXPIRY_MDSTABLE_CLIENT];
+      }
+    }
+  }
+  for (const auto& p : tablev) {
+    MDSTableServer *server = mds->get_table_server(p.first);
+    if (server && p.second > server->get_committed_version()) {
+      ++out.count[EXPIRY_MDSTABLE_SERVER];
+    }
+  }
+
+  out.count[EXPIRY_TRUNCATING_INODES] = truncating_inodes.size();
+  out.count[EXPIRY_PURGING_INODES]    = purging_inodes.size();
+}
+
+int LogSegment::dump_expiry_obligations(ceph::Formatter *f, MDSRank *mds, bool detail)
+{
+  ceph_assert(ceph_mutex_is_locked_by_me(mds->mds_lock));
+
+  expiry_obligations_t obligations;
+  count_expiry_obligations(mds, obligations);
+  const unsigned *count = obligations.count;
+  const unsigned *blocked = obligations.blocked;
+  auto oft_cseq = obligations.oft_committed_log_seq;
+  int num_obligations = obligations.num_categories();
+
+  // Pass 2: emit.
+  f->open_array_section("obligations");
+  for (int i = 0; i < EXPIRY_NUM_OBLIGATIONS; ++i) {
+    if (!count[i]) {
+      continue;
+    }
+    f->open_object_section("obligation");
+    f->dump_string("category", get_expiry_obligation_name(i));
+    f->dump_string("reason", get_expiry_obligation_reason(i));
+    f->dump_unsigned("count", count[i]);
+    f->dump_unsigned("blocked", blocked[i]);
+    if (i == EXPIRY_DIRTY_DIRFRAGS) {
+      f->dump_unsigned("num_dirfrags_to_commit", obligations.num_dirfrags_to_commit);
+    }
+
+    switch (i) {
+    case EXPIRY_OPEN_FILE_TABLE:
+      // Not a list of objects; the seq arithmetic is the diagnosis.
+      f->dump_unsigned("segment_seq", seq);
+      f->dump_unsigned("oft_committed_log_seq", oft_cseq);
+      f->dump_bool("oft_committing", mds->mdcache->open_file_table.is_any_committing());
+      f->dump_bool("oft_dirty", mds->mdcache->open_file_table.is_any_dirty());
+      break;
+    case EXPIRY_INOTABLE:
+      f->dump_unsigned("need_version", inotablev);
+      f->dump_unsigned("committed_version", mds->inotable->get_committed_version());
+      f->dump_unsigned("committing_version", mds->inotable->get_committing_version());
+      break;
+    case EXPIRY_SESSIONMAP:
+      f->dump_unsigned("need_version", sessionmapv);
+      f->dump_unsigned("committed_version", mds->sessionmap.get_committed());
+      f->dump_unsigned("committing_version", mds->sessionmap.get_committing());
+      break;
+    case EXPIRY_PURGING_INODES:
+      f->dump_stream("inos") << purging_inodes;
+      break;
+    default:
+      break;
+    }
+
+    if (!detail) {
+      f->close_section();       // obligation
+      continue;
+    }
+
+    switch (i) {
+    case EXPIRY_DIRTY_DIRFRAGS:
+      {
+        /* the same fold count_expiry_obligations() does */
+        std::set<CDir*> commit;
+        for (auto p = new_dirfrags.begin(member_offset(CDir, item_new)); !p.end(); ++p) {
+          commit.insert(*p);
+        }
+        for (auto p = dirty_dirfrags.begin(member_offset(CDir, item_dirty)); !p.end(); ++p) {
+          commit.insert(*p);
+        }
+        for (auto p = dirty_dentries.begin(member_offset(CDentry, item_dirty)); !p.end(); ++p) {
+          commit.insert((*p)->get_dir());
+        }
+        for (auto p = dirty_inodes.begin(member_offset(CInode, item_dirty)); !p.end(); ++p) {
+          CInode *in = *p;
+          if (!in->is_base() && in->get_parent_dn()) {
+            commit.insert(in->get_parent_dn()->get_dir());
+          }
+        }
+        f->dump_bool("truncated", commit.size() > EXPIRY_DETAIL_MAX);
+        f->open_array_section("objects");
+        /*
+         * Blocked dirfrags first: the set is ordered by pointer value, so
+         * selecting in iteration order would hide the one frozen dirfrag
+         * behind however many are committing perfectly well.
+         */
+        unsigned dumped = 0;
+        for (auto *dir : commit) {
+          if (dumped >= EXPIRY_DETAIL_MAX) {
+            break;
+          }
+          if (const char *why = auth_pin_block_reason(dir); why) {
+            dump_blocking_dirfrag(f, dir, why);
+            ++dumped;
+          }
+        }
+        for (auto *dir : commit) {
+          if (dumped >= EXPIRY_DETAIL_MAX) {
+            break;
+          }
+          if (!auth_pin_block_reason(dir)) {
+            dump_blocking_dirfrag(f, dir, nullptr);
+            ++dumped;
+          }
+        }
+        f->close_section();
+      }
+      break;
+    case EXPIRY_UNCOMMITTED_LEADERS:
+    case EXPIRY_UNCOMMITTED_PEERS:
+      {
+        const auto& reqs = (i == EXPIRY_UNCOMMITTED_LEADERS) ? uncommitted_leaders
+                                                             : uncommitted_peers;
+        f->open_array_section("objects");
+        for (const auto& r : reqs) {
+          f->dump_stream("reqid") << r;
+        }
+        f->close_section();
+      }
+      break;
+    case EXPIRY_UNCOMMITTED_FRAGMENTS:
+      f->open_array_section("objects");
+      for (const auto& df : uncommitted_fragments) {
+        f->dump_stream("dirfrag") << df;
+      }
+      f->close_section();
+      break;
+    case EXPIRY_DIRTY_DIRFRAG_DIR:
+      f->dump_bool("truncated", count[i] > EXPIRY_DETAIL_MAX);
+      f->open_array_section("objects");
+      walk_blocking_inodes(f, dirty_dirfrag_dir,
+                           member_offset(CInode, item_dirty_dirfrag_dir), true,
+                           always_true, filelock_of, why_scatter, nullptr);
+      f->close_section();
+      break;
+    case EXPIRY_DIRTY_DIRFRAG_DIRFRAGTREE:
+      f->dump_bool("truncated", count[i] > EXPIRY_DETAIL_MAX);
+      f->open_array_section("objects");
+      walk_blocking_inodes(f, dirty_dirfrag_dirfragtree,
+                           member_offset(CInode, item_dirty_dirfrag_dirfragtree), true,
+                           always_true, dftlock_of, why_scatter, nullptr);
+      f->close_section();
+      break;
+    case EXPIRY_DIRTY_DIRFRAG_NEST:
+      f->dump_bool("truncated", count[i] > EXPIRY_DETAIL_MAX);
+      f->open_array_section("objects");
+      walk_blocking_inodes(f, dirty_dirfrag_nest,
+                           member_offset(CInode, item_dirty_dirfrag_nest), true,
+                           always_true, nestlock_of, why_scatter, nullptr);
+      f->close_section();
+      break;
+    case EXPIRY_OPEN_FILES:
+      f->dump_bool("truncated", count[i] > EXPIRY_DETAIL_MAX);
+      f->open_array_section("objects");
+      walk_blocking_inodes(f, open_files, member_offset(CInode, item_open_file), true,
+                           needs_snapflush, no_lock, why_none, nullptr);
+      f->close_section();
+      break;
+    case EXPIRY_DIRTY_PARENT_INODES:
+      f->dump_bool("truncated", count[i] > EXPIRY_DETAIL_MAX);
+      f->open_array_section("objects");
+      walk_blocking_inodes(f, dirty_parent_inodes,
+                           member_offset(CInode, item_dirty_parent), true,
+                           always_true, no_lock, why_auth_pin, nullptr);
+      f->close_section();
+      break;
+    case EXPIRY_TOUCHED_SESSIONS:
+      f->open_array_section("objects");
+      for (const auto& name : touched_sessions) {
+        f->dump_stream("session") << name;
+      }
+      f->close_section();
+      break;
+    case EXPIRY_MDSTABLE_CLIENT:
+      f->open_array_section("objects");
+      for (const auto& p : pending_commit_tids) {
+        MDSTableClient *client = mds->get_table_client(p.first);
+        if (!client) {
+          continue;
+        }
+        for (const auto& q : p.second) {
+          if (!client->has_committed(q)) {
+            f->open_object_section("transaction");
+            f->dump_string("table", get_mdstable_name(p.first));
+            f->dump_unsigned("tid", q);
+            f->close_section();
+          }
+        }
+      }
+      f->close_section();
+      break;
+    case EXPIRY_MDSTABLE_SERVER:
+      f->open_array_section("objects");
+      for (const auto& p : tablev) {
+        MDSTableServer *server = mds->get_table_server(p.first);
+        if (server && p.second > server->get_committed_version()) {
+          f->open_object_section("table");
+          f->dump_string("table", get_mdstable_name(p.first));
+          f->dump_unsigned("need_version", p.second);
+          f->dump_unsigned("committed_version", server->get_committed_version());
+          f->close_section();
+        }
+      }
+      f->close_section();
+      break;
+    case EXPIRY_TRUNCATING_INODES:
+      {
+        f->dump_bool("truncated", count[i] > EXPIRY_DETAIL_MAX);
+        f->open_array_section("objects");
+        unsigned dumped = 0;
+        for (auto *in : truncating_inodes) {
+          if (dumped++ >= EXPIRY_DETAIL_MAX) {
+            break;
+          }
+          dump_blocking_inode(f, in, nullptr, nullptr);
+        }
+        f->close_section();
+      }
+      break;
+    default:
+      break;
+    }
+    f->close_section();         // obligation
+  }
+  f->close_section();           // obligations
+
+  return num_obligations;
+}
+
+void LogSegment::dump(ceph::Formatter *f, MDSRank *mds, bool detail)
+{
+  ceph_assert(ceph_mutex_is_locked_by_me(mds->mds_lock));
+
+  f->dump_unsigned("seq", seq);
+  f->dump_unsigned("offset", offset);
+  f->dump_unsigned("end", end);
+  f->dump_unsigned("num_events", num_events);
+
+  /*
+   * Where the segment sits in MDLog's trim bookkeeping.  Named trim_state
+   * rather than state because it says nothing about the write path: a
+   * segment is routinely untouched by trim and fully flushed to RADOS at the
+   * same time, which is what every healthy segment looks like.  Reported
+   * explicitly because the obligation list alone cannot distinguish never
+   * attempted, expired and waiting for a major segment boundary, and
+   * genuinely about to go.
+   */
+  bool expired = mds->mdlog->is_segment_expired(seq);
+  bool expiring = !expired && mds->mdlog->is_segment_expiring(seq);
+  f->dump_string("trim_state", expired ? "expired" : (expiring ? "expiring" : "untouched"));
+  bool current = mds->mdlog->is_current_segment(seq);
+  f->dump_bool("is_major_segment", mds->mdlog->is_major_segment(seq));
+  f->dump_bool("is_current", current);
+  f->dump_bool("flushed", mds->mdlog->is_segment_flushed(*this));
+
+  f->dump_unsigned("expiry_attempts", expiry_attempts);
+  if (expiry_attempts) {
+    utime_t now = ceph_clock_now();
+    f->dump_int("last_expiry_subs", last_expiry_subs);
+    f->dump_stream("first_expiry_attempt") << first_expiry_attempt;
+    f->dump_stream("last_expiry_attempt") << last_expiry_attempt;
+    f->dump_float("blocked_for", (double)(now - first_expiry_attempt));
+  }
+
+  int num_obligations = dump_expiry_obligations(f, mds, detail);
+  f->dump_int("num_obligations", num_obligations);
+
+  /*
+   * Always say what the state implies.  Neither an empty nor a populated
+   * obligation list means anything on its own: the lists are filled when
+   * events are journaled, so a recently written segment carries entries with
+   * nothing wrong, while an empty list can mean the segment has already
+   * expired and is only waiting for a major segment boundary.
+   */
+  if (expired) {
+    f->dump_string("note", "expired; removal waits for the next major segment "
+                           "boundary (see mds_log_minor_segments_per_major_segment)");
+  } else if (expiring && num_obligations) {
+    f->dump_string("note", "expiry is in progress; the obligations listed are "
+                           "still outstanding.  The gather may hold subs beyond "
+                           "these, for work that has since left this segment");
+  } else if (expiring) {
+    /*
+     * Two of try_to_expire()'s subs leave nothing behind here: a re-journaled
+     * EOpen moves its inodes to the current segment and then waits for the
+     * journal to be safe, and save_if_dirty() clears touched_sessions.  An
+     * empty list while expiring can also simply mean every sub has fired and
+     * C_MaybeExpiredSegment has not run yet.
+     */
+    f->dump_string("note", "expiry is in progress but this segment's obligation "
+                           "lists are already empty; the gather is waiting on "
+                           "work that has moved elsewhere, or on its completion "
+                           "callback.  last_expiry_subs is how many subs the "
+                           "attempt created");
+  } else if (current) {
+    f->dump_string("note", "this is the current segment; _expired() will not "
+                           "expire a segment that is still being written to, so "
+                           "expire_pos resting at its start means the journal is "
+                           "trimmed as far as it can be");
+  } else if (!mds->mdlog->is_segment_flushed(*this)) {
+    f->dump_string("note", "not fully flushed to the journal yet; trim() will "
+                           "not consider it until it is");
+  } else if (num_obligations) {
+    f->dump_string("note", "trim() has not needed to expire this segment; the "
+                           "obligations listed are what expiry would have to "
+                           "discharge, not evidence of a stall");
+  } else {
+    f->dump_string("note", "expirable; trim() has not needed to expire it yet");
+  }
 }
 
 // -----------------------
