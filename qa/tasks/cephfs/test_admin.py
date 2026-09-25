@@ -2512,6 +2512,236 @@ class TestAdminCommandDumpLoads(CephFSTestCase):
         for d in loads["dirfrags"]:
             self.assertLessEqual(d["path"].count("/"), 1)
 
+class TestAdminCommandDumpLogSegments(CephFSTestCase):
+    """
+    Tests for `dump log segments`, which reports why the mds log is not
+    being trimmed.
+    """
+
+    CLIENTS_REQUIRED = 1
+    MDSS_REQUIRED = 1
+
+    OBLIGATION_CATEGORIES = {
+        "dirty_dirfrags",
+        "uncommitted_leaders",
+        "uncommitted_peers",
+        "uncommitted_fragments",
+        "dirty_dirfrag_dir",
+        "dirty_dirfrag_dirfragtree",
+        "dirty_dirfrag_nest",
+        "open_files",
+        "open_file_table",
+        "dirty_parent_inodes",
+        "inotable",
+        "sessionmap",
+        "touched_sessions",
+        "mdstable_client",
+        "mdstable_server",
+        "truncating_inodes",
+        "purging_inodes",
+    }
+
+    def _check_segment(self, seg):
+        """Fields every segment report must carry."""
+        for k in ("seq", "offset", "end", "num_events", "trim_state",
+                  "expiry_attempts", "num_obligations", "note",
+                  "is_current", "is_major_segment"):
+            self.assertIn(k, seg)
+        self.assertIn(seg["trim_state"], ("untouched", "expiring", "expired"))
+        # a note is emitted in every state, empty obligation list or not
+        self.assertTrue(seg["note"])
+        self.assertIn("obligations", seg)
+        for ob in seg["obligations"]:
+            self.assertIn(ob["category"], self.OBLIGATION_CATEGORIES)
+            self.assertIn("reason", ob)
+            self.assertGreater(ob["count"], 0)
+            # blocked is a subset of count
+            self.assertIn("blocked", ob)
+            self.assertLessEqual(ob["blocked"], ob["count"])
+            if ob["category"] == "dirty_dirfrags":
+                # the four lists fold into one commit set, so this is
+                # bounded by the raw entry count
+                self.assertIn("num_dirfrags_to_commit", ob)
+                self.assertLessEqual(ob["num_dirfrags_to_commit"], ob["count"])
+                self.assertLessEqual(ob["blocked"], ob["num_dirfrags_to_commit"])
+        # num_obligations must agree with the list it summarises
+        self.assertEqual(seg["num_obligations"], len(seg["obligations"]))
+
+    def _check_header(self, out):
+        for k in ("num_segments", "num_expiring", "num_expired",
+                  "num_major_segments", "max_segments", "trim_slow",
+                  "expire_pos", "write_pos", "safe_pos"):
+            self.assertIn(k, out)
+        self.assertGreater(out["num_segments"], 0)
+
+    def test_dump_log_segments(self):
+        """
+        The no-argument form reports the blocking segment plus a rollup of
+        segments whose expiry is in progress.
+        """
+        self.mount_a.run_shell(["mkdir", "-p", "adir"])
+        self.mount_a.write_n_mb("adir/afile", 1)
+
+        out = self.fs.mds_asok(["dump", "log", "segments"])
+        self._check_header(out)
+        self.assertIn("oldest_unexpired_segment", out)
+        self.assertIn("expiring", out)
+
+        seg = out["oldest_unexpired_segment"]
+        if "note" not in seg or "seq" in seg:
+            self._check_segment(seg)
+        for s in out["expiring"]:
+            self._check_segment(s)
+
+    def test_dump_log_segments_all(self):
+        """
+        --all reports every segment, and the states it reports must add up
+        to the counters in the header.
+        """
+        self.mount_a.run_shell(["mkdir", "-p", "bdir"])
+        self.mount_a.write_n_mb("bdir/bfile", 1)
+
+        out = self.fs.mds_asok(["dump", "log", "segments", "--all"])
+        self._check_header(out)
+        self.assertIn("segments", out)
+        self.assertEqual(len(out["segments"]), out["num_segments"])
+
+        expiring = expired = 0
+        for seg in out["segments"]:
+            self._check_segment(seg)
+            if seg["trim_state"] == "expiring":
+                expiring += 1
+            elif seg["trim_state"] == "expired":
+                expired += 1
+        self.assertEqual(expiring, out["num_expiring"])
+        self.assertEqual(expired, out["num_expired"])
+
+    def test_dump_log_segments_seq(self):
+        """
+        --seq selects one segment, and an unknown seq is reported rather
+        than crashing the MDS.
+        """
+        out = self.fs.mds_asok(["dump", "log", "segments", "--all"])
+        seq = out["segments"][0]["seq"]
+
+        one = self.fs.mds_asok(["dump", "log", "segments", "--seq", str(seq)])
+        self.assertIn("segment", one)
+        self.assertEqual(one["segment"]["seq"], seq)
+        self._check_segment(one["segment"])
+
+        # a seq that cannot exist
+        bogus = self.fs.mds_asok(["dump", "log", "segments",
+                                  "--seq", str(2**62)])
+        self.assertIn("error", bogus["segment"])
+
+    def test_dump_log_segments_detail(self):
+        """
+        --detail must not crash and must stay consistent with the summary.
+        """
+        self.mount_a.run_shell(["mkdir", "-p", "cdir"])
+        for i in range(20):
+            self.mount_a.run_shell(["touch", "cdir/file{0}".format(i)])
+
+        out = self.fs.mds_asok(["dump", "log", "segments", "--all", "--detail"])
+        self._check_header(out)
+        for seg in out["segments"]:
+            self._check_segment(seg)
+            for ob in seg["obligations"]:
+                if "objects" not in ob:
+                    continue
+                # the object list is capped, so it may be shorter than
+                # count, but never longer
+                self.assertLessEqual(len(ob["objects"]), ob["count"])
+                # blocked entries are emitted first, so the cap can never
+                # hide them: every one of them must be present, and they
+                # must lead the list
+                shown = [o for o in ob["objects"] if "blocked_on" in o]
+                self.assertEqual(len(shown), min(ob["blocked"],
+                                                 len(ob["objects"])))
+                for o in ob["objects"][:len(shown)]:
+                    self.assertIn("blocked_on", o)
+
+    def test_dump_log_segments_after_flush(self):
+        """
+        After flushing the journal the blocking segment must not claim any
+        obligations that are really gone.
+        """
+        self.mount_a.run_shell(["mkdir", "-p", "ddir"])
+        self.mount_a.write_n_mb("ddir/dfile", 1)
+        self.fs.mds_asok(["flush", "journal"])
+
+        out = self.fs.mds_asok(["dump", "log", "segments"])
+        self._check_header(out)
+        # expire_pos must never run ahead of what has been written
+        self.assertLessEqual(out["expire_pos"], out["write_pos"])
+
+
+class TestMdsTrimHealthWarning(TestAdminCommands):
+    """
+    The MDS_TRIM health warning should say why trimming is stuck, not just
+    how far behind it is.
+    """
+
+    CLIENTS_REQUIRED = 1
+    MDSS_REQUIRED = 1
+
+    # the health metric reports on the oldest *unexpired* segment, so
+    # "expired" can never appear here
+    VALID_STATES = ("untouched", "expiring", "current")
+
+    def test_mds_trim_warning_reports_blocker(self):
+        """
+        MDS_TRIM must keep "Behind on trimming (N/M)" as its literal prefix,
+        because qa log-ignorelist entries and _get_unhealthy_mds_id() depend
+        on it, and must additionally report the blocking segment.
+        """
+        proc = self.mount_a.open_n_background('.', 400)
+        try:
+            self.config_set('mds', 'mds_debug_subtrees', 'true')
+            self.config_set('mds', 'mds_log_trim_decay_rate', '60')
+            self.config_set('mds', 'mds_log_trim_threshold', '1')
+            self.wait_for_health('MDS_TRIM', 60)
+
+            report = json.loads(
+                self.get_ceph_cmd_stdout('health detail --format json'))
+            detail = report['checks']['MDS_TRIM']['detail'][0]['message']
+            log.info("MDS_TRIM detail: {0}".format(detail))
+
+            # the prefix other tooling matches on must be intact, and must
+            # still be the first '(' in the line after the mds.X(mds.N) part
+            self.assertIn('Behind on trimming (', detail)
+            mds_id = detail.split('(')[0].replace('mds.', '')
+            self.assertTrue(mds_id)
+
+            # pre-existing metadata must survive
+            self.assertIn('num_segments:', detail)
+            self.assertIn('max_segments:', detail)
+
+            # and the new reason must be present
+            self.assertIn('oldest_unexpired_state:', detail)
+            state = detail.split('oldest_unexpired_state:')[1].split(',')[0].strip()
+            self.assertIn(state, self.VALID_STATES)
+
+            # when there are blockers the message names them, and the
+            # categories must be ones the MDS actually knows about
+            if 'blockers:' in detail:
+                cats = detail.split('blockers:')[1].split(',')[0].strip()
+                self.assertTrue(cats)
+                for cat in cats.split('+'):
+                    self.assertIn(
+                        cat,
+                        TestAdminCommandDumpLogSegments.OBLIGATION_CATEGORIES)
+
+            # the warning and the tell command must agree
+            segs = self.fs.mds_asok(['dump', 'log', 'segments'])
+            self.assertTrue(segs['trim_slow'])
+        finally:
+            self.config_set('mds', 'mds_log_trim_decay_rate', '1')
+            self.config_set('mds', 'mds_log_trim_threshold', '128')
+            self.config_set('mds', 'mds_debug_subtrees', 'false')
+            self.mount_a.kill_background(proc)
+
+
 class TestFsBalRankMask(CephFSTestCase):
     """
     Tests ceph fs set <fs_name> bal_rank_mask
