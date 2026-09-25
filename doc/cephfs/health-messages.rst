@@ -87,6 +87,30 @@ other daemons, please see :ref:`health-checks`.
     message may appear.  The threshold for this message to appear is controlled by
     the config option ``mds_log_warn_factor``, the default is 2.0.
 
+    The warning also names the segment that is holding trimming back, how
+    long it has been held, and what it is waiting for, for example::
+
+      mds.a(mds.0): Behind on trimming (258/128); oldest unexpired segment
+      4211 blocked 291s on dirty_dirfrag_dir(1), open_file_table(1)
+      blockers: dirty_dirfrag_dir+open_file_table, max_segments: 128,
+      num_segments: 258, oldest_unexpired_age: 291,
+      oldest_unexpired_attempts: 291, oldest_unexpired_seq: 4211,
+      oldest_unexpired_state: expiring
+
+    If it instead reports that all older segments have expired, then expiry
+    is healthy and only removal is pending -- see
+    ``mds_log_minor_segments_per_major_segment``.
+
+    For the full picture, including which clients are failing to return
+    capabilities, ask the MDS::
+
+      ceph tell mds.<id> dump log segments
+
+    With no arguments this reports the segment that is blocking trimming --
+    the oldest one that has not yet expired -- along with the reason it
+    cannot expire, and a rollup of any other segments whose expiry is
+    currently in progress.  See :ref:`cephfs-dump-log-segments`.
+
 ``MDS_HEALTH_CLIENT_LATE_RELEASE``, ``MDS_HEALTH_CLIENT_LATE_RELEASE_MANY``
 ---------------------------------------------------------------------------
 

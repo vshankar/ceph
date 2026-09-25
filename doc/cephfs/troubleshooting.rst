@@ -575,6 +575,140 @@ In certain scenarios, the Volumes plugin may need to be disabled to prevent
 compromise for the rest of the Ceph cluster. For details see:
 :ref:`disabling-volumes-plugin`
 
+.. _cephfs-dump-log-segments:
+
+Finding out why the MDS journal is not being trimmed
+====================================================
+
+When an MDS reports ``MDS_TRIM`` ("Behind on trimming"), the number of
+untrimmed log segments has exceeded ``mds_log_max_segments`` multiplied by
+``mds_log_warn_factor``. The warning says how far behind the MDS is, but not
+why. To get the reason::
+
+  ceph tell mds.<id> dump log segments
+
+With no arguments this reports two things:
+
+``oldest_unexpired_segment``
+  The oldest log segment that has not yet expired. Log segments are removed
+  from the journal strictly in order -- the journal's expire position is a
+  single offset, so a hole cannot be punched in it -- which means this one
+  segment holds back every newer segment no matter how cleanly those expired.
+  Note this is frequently the *current* segment, flagged by ``is_current``:
+  ``_expired()`` will not expire a segment that is still being written to, so
+  once everything older has expired the current one is what ``expire_pos``
+  rests behind. That is the fully-trimmed state, not a stall.
+
+  Its ``trim_state`` -- where it sits in the trim bookkeeping, which says
+  nothing about whether its events are on disk -- is one of:
+
+  ``untouched``
+    The MDS has not tried to expire it yet. Usually nothing is wrong, even
+    when ``obligations`` is not empty -- see below.
+
+  ``expiring``
+    An expiry attempt is outstanding. ``obligations`` says what it is waiting
+    for, and ``blocked_for`` says for how long. This is the interesting case.
+
+  ``expired``
+    The segment expired successfully and is waiting only to be removed.
+    Removal happens at *major* segment boundaries (see
+    ``mds_log_minor_segments_per_major_segment``), so the segment count is
+    expected to rise and fall in steps rather than smoothly. If this is what
+    you see, expiry is healthy.
+
+``expiring``
+  A rollup of every segment with an expiry attempt outstanding. This matters
+  because once enough segments are mid-expiry the MDS stops initiating new
+  expiry work, so the oldest unexpired segment may not be the whole story.
+
+Every segment also carries a ``note`` saying what its state implies, which is
+the field to read first.
+
+``obligations`` is not a list of things going wrong. A segment's obligation
+lists are filled when its events are journaled, not when expiry is attempted,
+so a segment carries them from the moment it is written and keeps them until
+the metadata they refer to reaches the metadata pool. They clear themselves
+as ordinary MDS activity commits that metadata, with no involvement from
+trimming at all. A freshly written segment reporting several obligations is
+the normal steady state. They are only *blockers* when something is actually
+waiting on them, which is what ``trim_state`` and ``trim_slow`` tell you.
+
+Each obligation names a ``category``, a ``reason``, a ``count`` and a
+``blocked`` count. The reason text matches the corresponding message in the
+MDS log at ``debug_mds = 10``, so you can grep for it.
+
+``blocked`` is the number to read. ``try_to_expire()`` issues work for every
+entry and the gather waits on all of them, so one stuck entry among thousands
+is what actually holds the segment. ``count: 4213, blocked: 1`` says the
+segment is held by a single object, and ``--detail`` names it: blocked
+entries are always emitted first, so the per-category cap on the object list
+can never hide the culprit behind entries that are committing perfectly well.
+Each such entry carries ``blocked_on``:
+
+``frozen``, ``exporting_tree``, ``exporting_inode``, ``fragmenting_dir``
+  The object cannot be auth-pinned, so expiry is parked on ``WAIT_UNFREEZE``.
+  A subtree export or a directory fragmentation is in progress, or one is
+  stuck.
+
+``lock_unstable``
+  The scatter lock is mid-gather, waiting on ``WAIT_STABLE``. For
+  ``dirty_dirfrag_dir`` this is usually a client that has not returned its
+  capabilities.
+
+``ambiguous_auth``
+  Authority for the inode is in flux, so expiry is parked on
+  ``WAIT_SINGLEAUTH``. An export is in flight or was interrupted.
+
+``not_auth``
+  This rank is not the authority; the nudge has been forwarded and the answer
+  has to come from another MDS.
+
+Common categories:
+
+``dirty_dirfrag_dir``, ``dirty_dirfrag_nest``, ``dirty_dirfrag_dirfragtree``
+  A scatter lock has accumulated directory statistics that must be written
+  back before the segment can go. Only ``dirty_dirfrag_dir`` (the file lock)
+  involves client capabilities; the other two wait on in-flight locks, on
+  other MDS ranks, or on a frozen directory.
+
+``open_file_table``
+  Expiry is deferred until the open file table has committed at a log
+  sequence past this segment. The report includes the committed sequence and
+  whether a commit is in flight. A large open file table makes every commit
+  slower, which paces all segment expiry.
+
+``uncommitted_leaders``, ``uncommitted_peers``, ``uncommitted_fragments``
+  A distributed operation or directory fragmentation has not completed.
+  A laggy or recovering peer rank will hold these open indefinitely.
+
+``dirty_dirfrags``, ``dirty_parent_inodes``
+  Metadata still has to be written to the metadata pool. A frozen directory
+  (mid-export or mid-fragment) will block this with no timeout.
+
+``truncating_inodes``, ``purging_inodes``
+  A truncate or a stray purge has not finished.
+
+Add ``--detail`` to name the objects involved. For a lock obligation this
+includes the lock's state and, for capability-bearing locks, which clients
+still owe which capabilities and for how long::
+
+  ceph tell mds.<id> dump log segments --detail
+
+A client appearing there with a large ``revoke_age`` is failing to release
+capabilities; that is the same condition reported as
+``MDS_CLIENT_LATE_RELEASE``, and the two warnings commonly appear together
+because one causes the other. There is no timeout that resolves it -- the
+client must release, or the session must be evicted.
+
+Other forms::
+
+  ceph tell mds.<id> dump log segments --seq <n>   # one specific segment
+  ceph tell mds.<id> dump log segments --all       # every segment
+
+Note that ``--detail`` caps how many objects it names per category, so for a
+badly backed-up segment the list is a sample rather than an exhaustive dump.
+
 Reporting Issues
 ================
 
