@@ -39,3 +39,11 @@ add_executable(unittest_mds_standby_affinity
 )
 add_ceph_unittest(unittest_mds_standby_affinity)
 target_link_libraries(unittest_mds_standby_affinity mds ceph-common global ${BLKID_LIBRARIES})
+
+# unittest_mds_snap_null_shadow
+add_executable(unittest_mds_snap_null_shadow
+  TestSnapNullShadow.cc
+  $<TARGET_OBJECTS:unit-main>
+)
+add_ceph_unittest(unittest_mds_snap_null_shadow)
+target_link_libraries(unittest_mds_snap_null_shadow mds osdc ceph-common global ${BLKID_LIBRARIES})
