@@ -125,10 +125,16 @@ class TestOldInodeCoW(TestVolumesHelper):
         @last_destroyed and the purge gate is SHUT - the state a long lived
         cluster is in, and the one the fix has to hold in.
         """
+        # Unmount cleanly BEFORE failing the rank.  Forcing the unmount
+        # afterwards leaves the client's session behind in the sessionmap,
+        # so the restarted MDS sits in up:reconnect for the whole of
+        # mds_reconnect_timeout waiting for a client that is already gone,
+        # and then logs "evicting unresponsive client" - which fails the job
+        # on the cluster log check.
+        self.mount_a.umount_wait()
         self.fs.mds_asok(["flush", "journal"])
         self.fs.mds_asok(["flush", "journal"])
         self.fs.fail()
-        self.mount_a.umount_wait(force=True)
         self.fs.set_joinable()
         self.fs.wait_for_daemons()
         self.mount_a.mount_wait()
