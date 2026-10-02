@@ -2,6 +2,13 @@ overrides:
   ceph:
     cephfs:
       max_mds: 5
+    conf:
+      mds:
+        # Stall every mdsmap state transition (MDSRank::handle_mds_map calls
+        # usleep() on this) so another rank tries to connect while this one is
+        # still bootstrapping.  Only reachable with more than one rank, so
+        # ranks/1 does not pay for it.
+        mds_sleep_rank_change: 5000000.0
   check-counter:
     counters:
       mds:
