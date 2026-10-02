@@ -1,0 +1,10 @@
+# A large, deep, cold tree that then gets walked end to end three times
+# (tar x, make, rm -rv) - the workload the prefetch_* dimensions of this
+# suite actually vary the behaviour of.  6h, matching suites/fsstress here
+# rather than the 5h fs:workload uses, because thrashing stretches it.
+tasks:
+- workunit:
+    timeout: 6h
+    clients:
+      all:
+        - kernel_untar_build.sh
