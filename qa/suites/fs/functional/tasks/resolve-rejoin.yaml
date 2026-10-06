@@ -1,0 +1,16 @@
+overrides:
+  ceph:
+    log-ignorelist:
+      - FS_DEGRADED
+      - MDS_ALL_DOWN
+      - MDS_UP_LESS_THAN_MAX
+      - MDS_INSUFFICIENT_STANDBY
+      - MDS_CLIENTS_LAGGY
+      - evicting unresponsive client
+      - Reduced data availability
+      - PG_AVAILABILITY
+
+tasks:
+- cephfs_test_runner:
+    modules:
+      - tasks.cephfs.test_resolve_rejoin.TestResolveRejoin.test_single_rank_failover
