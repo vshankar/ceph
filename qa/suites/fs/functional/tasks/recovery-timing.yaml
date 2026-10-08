@@ -1,0 +1,51 @@
+overrides:
+  ceph:
+    cluster-conf:
+      mds:
+        # timing run: keep the phase markers (dout 7/10) and message
+        # send/receive lines (debug ms 1), and drop the debug checks that
+        # conf/mds.yaml turns on, which slow the cache walks down
+        debug mds: 10
+        debug ms: 1
+        mds verify scatter: false
+        mds debug scatterstat: false
+        mds debug frag: false
+        # keep the journaled set in the journal until failover
+        mds log max segments: 100000
+        # about 2M inodes per rank at ~4 KiB each; survivors keep the
+        # whole set in cache
+        mds cache memory limit: 16G
+    log-ignorelist:
+      - Reduced data availability
+      - MDS_ALL_DOWN
+      - MDS_UP_LESS_THAN_MAX
+      - MDS_INSUFFICIENT_STANDBY
+      - FS_DEGRADED
+      - MDS_CACHE_OVERSIZED
+      - MDS_CLIENT_RECALL
+      - MDS_CLIENT_LATE_RELEASE
+      - MDS_TRIM
+      - MDS_SLOW_REQUEST
+      - MDS_SLOW_METADATA_IO
+      - is laggy
+      - failing to respond to cache pressure
+      - failing to respond to capability release
+      - Behind on trimming
+      - slow requests
+      - filesystem is degraded
+      - filesystem is offline
+      - insufficient standby
+
+recovery_timing:
+  cached_files_per_rank: 500000
+  journaled_files_per_rank: 1500000
+  open_files_per_rank: 100000
+  files_per_dir: 5000
+  create_workers: 48
+  drop_client_cache: true
+
+tasks:
+- cephfs_test_runner:
+    fail_on_skip: false
+    modules:
+      - tasks.cephfs.test_recovery_timing
