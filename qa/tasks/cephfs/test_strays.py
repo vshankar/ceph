@@ -1051,3 +1051,152 @@ touch pin/placeholder
         self.wait_until_equal(
         lambda: len(self.fs.rank_tell(["dump", "stray"])),
         expect_val=NUM_DIRS, timeout=60, period=1)
+
+
+class TestStrayRenameRace(CephFSTestCase):
+    """
+    Renames onto the same target name racing with a lock-dropping deferral
+    (dirfrag freeze) after the stray dentry for the old target inode has
+    been prepared. See https://tracker.ceph.com/issues/79321
+    """
+    CLIENTS_REQUIRED = 3
+    MDSS_REQUIRED = 1
+
+    DIR = "rename_race"
+    TARGET = "target"
+
+    def _rename_op(self, src):
+        """
+        Find the in-flight rename request for renaming src onto the target.
+        """
+        for op in self.fs.get_ops()['ops']:
+            desc = op['description']
+            if " rename " in desc and f"/{src} " in desc:
+                return op
+        return None
+
+    def _wait_for_rename_event(self, src, event_prefix, timeout=60):
+        def check():
+            op = self._rename_op(src)
+            if op is None:
+                return False
+            events = [e['event'] for e in op['type_data']['events']]
+            log.info(f"rename of {src}: events {events}")
+            return any(e.startswith(event_prefix) for e in events)
+        self.wait_until_true(check, timeout=timeout)
+
+    def _rank0_gid(self):
+        return self.fs.get_rank(rank=0)['gid']
+
+    def test_rename_target_changed_while_frozen(self):
+        """
+        That a rename whose target dentry gets relinked to a different inode
+        while the rename is waiting (after its locks were dropped) re-prepares
+        the stray dentry rather than asserting.
+
+        Sequence (three clients since the VFS serializes renames in a
+        directory on a single mount):
+
+          R1: mv src_r1 target   -- journal paused, holds target's xlock
+          R2: mv src_r2 target   -- auth-pins dentries, waits on the xlock
+          dirfrag split          -- dir freezing, held open by R1/R2 pins
+          R3: mv src_r3 target   -- can't auth-pin, waits for unfreeze
+          unpause journal        -- R1 completes; R2 path-locks, prepares
+                                    straydn for src_r1's inode, then fails
+                                    to auth-pin in the freezing dir, drops
+                                    all locks and queues behind R3. R3
+                                    relinks target to src_r3's inode, then
+                                    R2 retries with a stale straydn.
+        """
+        mounts = [self.mount_a, self.mount_b, self.mount_c]
+        srcs = ["src_r1", "src_r2", "src_r3"]
+
+        self.mount_a.run_shell(["mkdir", self.DIR])
+        self.mount_a.write_file(f"{self.DIR}/{self.TARGET}", "orig")
+        for src in srcs:
+            self.mount_a.write_file(f"{self.DIR}/{src}", src)
+        for m in mounts:
+            m.run_shell(["ls", "-l", self.DIR])
+
+        self.fs.rank_asok(["flush", "journal"])
+        gid = self._rank0_gid()
+
+        procs = []
+        try:
+            self.fs.rank_asok(["config", "set", "mds_log_pause", "1"])
+
+            def rename(mount, src):
+                return mount.run_shell(
+                    ["mv", f"{self.DIR}/{src}", f"{self.DIR}/{self.TARGET}"],
+                    wait=False)
+
+            procs.append(rename(self.mount_a, "src_r1"))
+            self._wait_for_rename_event("src_r1", "submit entry")
+
+            procs.append(rename(self.mount_b, "src_r2"))
+            self._wait_for_rename_event("src_r2", "failed to xlock")
+
+            self.fs.rank_asok(["dirfrag", "split", f"/{self.DIR}", "0/0", "1"])
+
+            procs.append(rename(self.mount_c, "src_r3"))
+            self._wait_for_rename_event("src_r3", "failed to authpin")
+        finally:
+            self.fs.rank_asok(["config", "set", "mds_log_pause", "0"])
+
+        for p in procs:
+            p.wait()
+
+        self.assertEqual(self._rank0_gid(), gid, "mds rank 0 restarted")
+        self.assertEqual(self.mount_a.ls(self.DIR), [self.TARGET])
+        # R2 must have been the last to rename onto target; otherwise it
+        # retried before R3 and the stale straydn path was not exercised.
+        content = self.mount_a.read_file(f"{self.DIR}/{self.TARGET}")
+        self.assertEqual(content.strip(), "src_r2")
+
+    def test_rename_storm_with_fragmenting(self):
+        """
+        That many clients renaming onto the same target while the parent
+        and stray directories are repeatedly split and merged does not
+        crash the MDS.
+        """
+        duration = 120
+        procs_per_mount = 4
+        mounts = [self.mount_a, self.mount_b, self.mount_c]
+
+        self.mount_a.run_shell(["mkdir", self.DIR])
+        self.mount_a.write_file(f"{self.DIR}/{self.TARGET}", "orig")
+        gid = self._rank0_gid()
+
+        procs = []
+        for m_idx, m in enumerate(mounts):
+            for p_idx in range(procs_per_mount):
+                prefix = f"src_{m_idx}_{p_idx}"
+                script = dedent(f"""
+                    end=$((SECONDS + {duration}))
+                    i=0
+                    while [ $SECONDS -lt $end ]; do
+                        echo {prefix}_$i > {self.DIR}/{prefix}_$i
+                        mv {self.DIR}/{prefix}_$i {self.DIR}/{self.TARGET}
+                        i=$((i + 1))
+                    done
+                """)
+                procs.append(m.run_shell(["bash", "-c", script], wait=False,
+                                         timeout=duration + 300))
+
+        dirs = [f"/{self.DIR}"] + [f"~mdsdir/stray{i}" for i in range(10)]
+        end = time.time() + duration
+        while time.time() < end:
+            for d in dirs:
+                for cmd in (["dirfrag", "split", d, "0/0", "1"],
+                            ["dirfrag", "merge", d, "0/0"]):
+                    try:
+                        self.fs.rank_asok(cmd)
+                    except CommandFailedError as e:
+                        # already fragmenting, or nothing to merge
+                        log.info(f"{cmd} failed: {e}")
+            time.sleep(1)
+
+        for p in procs:
+            p.wait()
+
+        self.assertEqual(self._rank0_gid(), gid, "mds rank 0 restarted")
