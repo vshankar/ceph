@@ -1,0 +1,58 @@
+This suite verifies that mgr/volumes' auto-upgrade of pre-v3 (v1 and v2)
+subvolumes to the v3 layout is non-disruptive across a Ceph upgrade.
+
+Starting from an N-1|N-2 release, the setup step creates, with all the
+subvolumes below (except clones and purges) being either v1 or v2 (the
+3-setup facet):
+
+  - 3 subvolumes, each mounted by a dedicated client (a mix of kernel and
+    ceph-fuse) using subvolume-scoped credentials, with a background writer
+    continuously doing IO in it. Two of them get snapshots (one and two)
+    taken while their clients are writing.
+  - 3 async clones (from a snapshot of a separate source subvolume, which
+    has two snapshots) that are caught mid-copy and paused
+    (mgr/volumes/pause_cloning). The clones themselves are v2, as the old
+    ceph-mgr creates them so.
+  - 3 subvolume purges (`fs subvolume rm`) of v2 subvolumes that are caught
+    mid-purge and paused (mgr/volumes/pause_purging). The old ceph-mgr
+    upgrades a v1 subvolume to v2 before removing it, so there are no v1
+    purges.
+
+v2 subvolumes are created through `fs subvolume create`, and their
+credentials through `fs subvolume authorize`. No release that can be
+upgraded from creates v1 subvolumes, so they are fabricated in the layout
+ceph-mgr used to create them in (data and v1 snapshots in
+<subvolume>/<uuid>, .meta with version 1), with credentials for the data
+dir. The first snapshot of a v1 subvolume is taken directly in its data dir,
+the rest through the old ceph-mgr, which must handle it as v1. A v1
+subvolume without snapshots is not accessed through the old ceph-mgr, which
+would upgrade it to v2.
+
+The cluster is then upgraded, either:
+
+  - mgr-only first: the new ceph-mgr can't auto-upgrade subvolumes as the old
+    MDS does not know the `ceph.dir.subvolume.prevpath` vxattr. The v1/v2
+    subvolumes must keep working as such (except for a v1 subvolume without
+    snapshots possibly getting upgraded to v2, as ceph-mgr always did):
+    client IO and subvolume commands (getpath, info, snapshot
+    create/ls/info, clone status) must succeed, and the clones and purges
+    must finish. The remaining daemons are upgraded afterwards.
+  - full: all daemons in one go.
+
+After the upgrade, the first subvolume command on each subvolume must upgrade
+it to v3 in place, keeping its uuid whether or not it has snapshots, while
+its client keeps doing IO uninterrupted and without having to remount. The
+clones and purges started before the upgrade must finish successfully (for
+v1, while the clone source, and the snapshot being cloned with it, gets
+upgraded). Snapshot listing must include the snapshots taken before (v1/v2)
+and after (v3) the auto-upgrade, and new clones of v1/v2 snapshots must work
+(both with only ceph-mgr upgraded and after the full upgrade), with data
+matching the snapshot.
+
+Finally, each client is remounted at its subvolume's new v3 path twice: with
+the credentials it had been using (for the v1/v2 data dir), and with new ones
+from `fs subvolume authorize` after the upgrade (which must be for the v3
+path). Each time, all the data written by it must be accessible and intact,
+and the subvolume must be writable.
+
+This suite should make use of N-1|N-2 releases.
