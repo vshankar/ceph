@@ -15,5 +15,7 @@ overrides:
 tasks:
   - cephfs_test_runner:
       fail_on_skip: false
+      failfast: false
       modules:
-        - tasks.cephfs.test_client_recovery
+        - tasks.cephfs.test_client_recovery.TestClientRecovery.test_filelock_intr_after_grant
+        - tasks.cephfs.test_client_recovery.TestClientRecovery.test_flock_intr_after_grant
