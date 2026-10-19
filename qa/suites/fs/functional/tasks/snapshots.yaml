@@ -5,15 +5,24 @@ overrides:
     log-ignorelist:
       - evicting unresponsive client
       - RECENT_CRASH
-  # DEBUG(teuth 634231): kernel client dynamic debug ("module ceph +p"),
-  # enabled on first mount, disabled on last umount; ends up in kern.log
-  kclient:
-    dynamic_debug: true
 
 tasks:
 - exec:
     mon.a:
       - ceph config set mgr mgr/crash/warn_recent_interval 0
+# DEBUG(teuth 634231): kernel client dynamic debug for the capsnap/writeback/
+# truncate paths; ends up in kern.log. Not kclient's dynamic_debug option: that
+# one is refcounted on mounts and gets switched off for good when
+# CephFSTestCase.setUp() unmounts everything. Settings made here stick for as
+# long as the module stays loaded.
+- exec:
+    client.0:
+      - modprobe ceph
+      - echo 'file fs/ceph/snap.c +p' > /sys/kernel/debug/dynamic_debug/control
+      - echo 'file fs/ceph/caps.c +p' > /sys/kernel/debug/dynamic_debug/control
+      - echo 'file fs/ceph/addr.c +p' > /sys/kernel/debug/dynamic_debug/control
+      - echo 'file fs/ceph/inode.c +p' > /sys/kernel/debug/dynamic_debug/control
+      - echo 'file fs/ceph/file.c +p' > /sys/kernel/debug/dynamic_debug/control
 - cephfs_test_runner:
     fail_on_skip: false
     modules:
