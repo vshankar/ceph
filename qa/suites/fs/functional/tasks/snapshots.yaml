@@ -5,6 +5,10 @@ overrides:
     log-ignorelist:
       - evicting unresponsive client
       - RECENT_CRASH
+  # DEBUG(teuth 634231): kernel client dynamic debug ("module ceph +p"),
+  # enabled on first mount, disabled on last umount; ends up in kern.log
+  kclient:
+    dynamic_debug: true
 
 tasks:
 - exec:
@@ -13,4 +17,5 @@ tasks:
 - cephfs_test_runner:
     fail_on_skip: false
     modules:
-      - tasks.cephfs.test_snapshots
+      # DEBUG(teuth 634231): run only the failing test
+      - tasks.cephfs.test_snapshots.TestSnapshots.test_multimds_hardlink
