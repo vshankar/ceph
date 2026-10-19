@@ -23,6 +23,13 @@ tasks:
       - echo 'file fs/ceph/addr.c +p' > /sys/kernel/debug/dynamic_debug/control
       - echo 'file fs/ceph/inode.c +p' > /sys/kernel/debug/dynamic_debug/control
       - echo 'file fs/ceph/file.c +p' > /sys/kernel/debug/dynamic_debug/control
+# DEBUG(teuth 634231): rsyslog's kern.log came back empty on ubuntu 24.04
+# (job 658001), so save the kernel log into the archive ourselves. Runs on
+# unwind, i.e. also when the test fails.
+- exec_on_cleanup:
+    client.0:
+      - "dmesg --time-format iso > $TESTDIR/archive/dmesg.log || true"
+      - "journalctl -k -o short-precise --no-pager > $TESTDIR/archive/kern-journal.log || true"
 - cephfs_test_runner:
     fail_on_skip: false
     modules:
