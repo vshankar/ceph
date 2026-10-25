@@ -2791,6 +2791,10 @@ class TestMDSFail(TestAdminCommands):
                               retval=1, errmsgs=health_warn)
         self.run_ceph_cmd(f'mds fail {active_mds_id} --yes-i-really-mean-it')
 
+        # Wait for the standby to take over, so that unmounting in
+        # CephFSTestCase.tearDown() does not race with the failover.
+        self.fs.wait_for_daemons()
+
     def test_with_health_warn_trim(self):
         '''
         Test that, when health warning MDS_TRIM is present for an MDS, command
@@ -2805,6 +2809,10 @@ class TestMDSFail(TestAdminCommands):
         self.negtest_ceph_cmd(args=f'mds fail {active_mds_id}',
                               retval=1, errmsgs=health_warn)
         self.run_ceph_cmd(f'mds fail {active_mds_id} --yes-i-really-mean-it')
+
+        # Wait for the standby to take over, so that unmounting in
+        # CephFSTestCase.tearDown() does not race with the failover.
+        self.fs.wait_for_daemons()
 
     def _get_unhealthy_mds_id(self, health_warn):
         '''
@@ -2851,6 +2859,10 @@ class TestMDSFail(TestAdminCommands):
                               errmsgs=health_warn)
         self.run_ceph_cmd(f'mds fail {mds1_id}')
         self.run_ceph_cmd(f'mds fail {mds0_id} --yes-i-really-mean-it')
+
+        # Wait for the standby to take over, so that unmounting in
+        # CephFSTestCase.tearDown() does not race with the failover.
+        self.fs.wait_for_daemons()
 
     def test_when_other_MDS_has_warn_TRIM(self):
         '''
