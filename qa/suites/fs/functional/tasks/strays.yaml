@@ -1,4 +1,4 @@
 tasks:
   - cephfs_test_runner:
       modules:
-        - tasks.cephfs.test_strays
+        - tasks.cephfs.test_strays.TestStrayRenameRace.test_rename_onto_shared_names_with_fragmentation
