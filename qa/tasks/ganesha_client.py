@@ -99,7 +99,13 @@ class GaneshaClient(Task):
         log.debug('unmounting ganesha client(s)')
         for (remote, mntpt) in self.mounts.values():
             log.debug(f'unmounting {mntpt}')
-            remote.run(args=['sudo', 'umount', mntpt])
+            # a dead ganesha server hangs umount; force it so that the
+            # job still gets to archive the logs
+            proc = remote.run(args=['sudo', 'timeout', '-s', 'KILL', '300',
+                                    'umount', mntpt], check_status=False)
+            if proc.exitstatus != 0:
+                log.warning(f'umount of {mntpt} failed ({proc.exitstatus}), forcing it')
+                remote.run(args=['sudo', 'umount', '-f', '-l', mntpt])
             remote.run(args=['rmdir', '--', mntpt], timeout=60)
         self.mounts = {}
 
