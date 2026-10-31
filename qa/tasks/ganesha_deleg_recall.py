@@ -15,12 +15,19 @@ The export must expose the file system root (path and cmount_path "/"),
 so that the same relative path names the same file on both mounts, and
 ganesha must hand out delegations (see ganesha-reconf).
 
+A scenario listed under known_failures is logged, not failed, when the
+recall does not happen or the clients see different data; the task logs
+any known failure that passed. Errors setting up a scenario, and the loss
+of ganesha's CephFS session, always fail the task.
+
   - ganesha-deleg-recall:
       cluster_id: <nfs cluster id>
       nfs_client: client.0       # mounted by ganesha-client
       cephfs_client: client.1    # mounted by ceph-fuse
       fs_name: cephfs
       timeout: 60                # seconds, per conflicting access
+      known_failures:            # scenario names
+        - read-deleg-vs-write
 """
 
 import json
@@ -35,6 +42,9 @@ from teuthology.orchestra import run
 from teuthology.task import Task
 
 log = logging.getLogger(__name__)
+
+class RecallFailure(Exception):
+    """the delegation was not recalled or the clients disagree on the data"""
 
 # hold <path> open until stdin is closed: 'r' reads it, 'w' writes
 # <content> without syncing so that it stays dirty in the NFS client
@@ -113,8 +123,8 @@ class GaneshaDelegRecall(Task):
                                       stdout=StringIO(), check_status=False)
         elapsed = time.time() - start
         if proc.exitstatus != 0:
-            raise RuntimeError(f'{name}: {args} on the CephFS client failed or timed '
-                               f'out ({proc.exitstatus}) after {elapsed:.1f}s')
+            raise RecallFailure(f'{name}: {args} on the CephFS client failed or timed '
+                                f'out ({proc.exitstatus}) after {elapsed:.1f}s')
         returned = 0
         for _ in range(self.timeout):
             returned = self._delegreturns() - before
@@ -123,15 +133,14 @@ class GaneshaDelegRecall(Task):
             time.sleep(1)
         log.info(f'{name}: {args} took {elapsed:.1f}s, {returned} delegation(s) returned')
         if returned == 0:
-            raise RuntimeError(f'{name}: no delegation returned; was one granted?')
+            raise RecallFailure(f'{name}: no delegation returned; was one granted?')
         return proc.stdout.getvalue()
 
     def _read_nfs(self, path):
         return self.nfs_remote.read_file(path).decode()
 
-    def _test_read_deleg_vs_write(self):
+    def _test_read_deleg_vs_write(self, name):
         """a CephFS write recalls a read delegation; NFS sees the new data on reopen"""
-        name = 'read-deleg-vs-write'
         nfs_path = os.path.join(self.nfs_dir, name)
         self.nfs_remote.write_file(nfs_path, 'nfs')
         holder = self._hold_open(nfs_path, 'r')
@@ -139,22 +148,20 @@ class GaneshaDelegRecall(Task):
         self._release(holder)
         data = self._read_nfs(nfs_path)
         if data != 'cephfs':
-            raise RuntimeError(f'{name}: NFS client read {data!r}, expected the CephFS write')
+            raise RecallFailure(f'{name}: NFS client read {data!r}, expected the CephFS write')
 
-    def _test_write_deleg_vs_read(self):
+    def _test_write_deleg_vs_read(self, name):
         """a CephFS read recalls a write delegation; the NFS client's dirty data is flushed first"""
-        name = 'write-deleg-vs-read'
         nfs_path = os.path.join(self.nfs_dir, name)
         holder = self._hold_open(nfs_path, 'w', content='nfs-dirty')
         data = self._conflict(name, ['cat', f'{self.cephfs_dir}/{name}'])
         self._release(holder)
         if data != 'nfs-dirty':
-            raise RuntimeError(f'{name}: CephFS client read {data!r}, expected the '
-                               f'NFS client\'s unflushed write')
+            raise RecallFailure(f'{name}: CephFS client read {data!r}, expected the '
+                                f'NFS client\'s unflushed write')
 
-    def _test_read_deleg_vs_setattr(self):
+    def _test_read_deleg_vs_setattr(self, name):
         """a CephFS chmod recalls a read delegation"""
-        name = 'read-deleg-vs-setattr'
         nfs_path = os.path.join(self.nfs_dir, name)
         self.nfs_remote.write_file(nfs_path, 'nfs')
         holder = self._hold_open(nfs_path, 'r')
@@ -185,13 +192,35 @@ class GaneshaDelegRecall(Task):
         if not sessions:
             raise RuntimeError('no ganesha CephFS session found')
 
-        self._test_read_deleg_vs_write()
-        self._test_write_deleg_vs_read()
-        self._test_read_deleg_vs_setattr()
+        known = set(self.config.get('known_failures', []))
+        scenarios = {
+            'read-deleg-vs-write': self._test_read_deleg_vs_write,
+            'write-deleg-vs-read': self._test_write_deleg_vs_read,
+            'read-deleg-vs-setattr': self._test_read_deleg_vs_setattr,
+        }
+        unknown = known - scenarios.keys()
+        if unknown:
+            raise RuntimeError(f'unknown scenario(s) in known_failures: {unknown}')
+        failed = []
+        for name, scenario in scenarios.items():
+            try:
+                scenario(name)
+            except RecallFailure as e:
+                if name not in known:
+                    raise
+                log.warning(f'known failure: {e}')
+                failed.append(name)
+                for proc in list(self.holders):
+                    self._release(proc)
+                continue
+            if name in known:
+                log.info(f'{name}: passed, but is listed in known_failures')
 
         missing = sessions - self._ganesha_sessions()
         if missing:
             raise RuntimeError(f'ganesha CephFS session(s) {missing} went away')
+        if failed:
+            log.warning(f'known failures: {failed} (see the deleg-recall README)')
 
     def end(self):
         super(GaneshaDelegRecall, self).end()
