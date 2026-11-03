@@ -400,6 +400,116 @@ class TestCharMapRecovery(CephFSTestCase, CharMapMixin):
         self.mount_a.mount()
         self.mount_a.run_shell_payload("ls -l foo")
 
+    def _replay_and_check(self, path, names):
+        """
+        Fail the file system so that the next MDS replays the journal, then
+        check that the dentries are visible with their original names.
+        """
+
+        self.mount_a.umount_wait()
+
+        self.fs.fail()
+        self.fs.set_joinable()
+        self.fs.wait_for_daemons()
+
+        self.mount_a.mount()
+        self.mount_a.run_shell_payload(f"ls -l {path}")
+        ls = self.mount_a.ls(path)
+        self.assertEqual(sorted(ls), sorted(names))
+
+    def test_recreate_after_unlink_altname_recovery(self):
+        """
+        That the MDS replays a re-created dentry when the first journal event
+        replay sees for that name is the unlink.
+
+        Replay adds a null dentry with no alternate_name for the unlink
+        (nullbit carries none), and the later create's fullbit (with the
+        alternate_name) must update that cached dentry.
+        """
+
+        dname = "Grüßen"
+        self.mount_a.run_shell_payload("mkdir foo/")
+        self.mount_a.setfattr("foo/", "ceph.dir.casesensitive", "0")
+        self.mount_a.run_shell_payload(f"dd if=/dev/urandom of=foo/{dname} conv=fsync bs=1 count=1")
+        # trim the journal so that replay does not see the create
+        self.fs.flush()
+
+        self.mount_a.run_shell_payload(f"rm foo/{dname}")
+        self.mount_a.run_shell_payload(f"dd if=/dev/urandom of=foo/{dname} conv=fsync bs=1 count=1")
+
+        self._replay_and_check("foo", [dname])
+
+    def test_rename_onto_unlinked_altname_recovery(self):
+        """
+        That the MDS replays a rename onto a name whose unlink is the first
+        journal event replay sees for that name (the "safe save" pattern:
+        write a temp file, remove the original, rename temp to original).
+        """
+
+        dname = "Grüßen"
+        self.mount_a.run_shell_payload("mkdir foo/")
+        self.mount_a.setfattr("foo/", "ceph.dir.casesensitive", "0")
+        self.mount_a.run_shell_payload(f"dd if=/dev/urandom of=foo/{dname} conv=fsync bs=1 count=1")
+        # trim the journal so that replay does not see the create
+        self.fs.flush()
+
+        self.mount_a.run_shell_payload(f"dd if=/dev/urandom of=foo/{dname}.tmp conv=fsync bs=1 count=1")
+        self.mount_a.run_shell_payload(f"rm foo/{dname}")
+        self.mount_a.run_shell_payload(f"mv foo/{dname}.tmp foo/{dname}")
+
+        self._replay_and_check("foo", [dname])
+
+    def test_recreate_other_case_altname_recovery(self):
+        """
+        That the MDS replays a dentry re-created with a different case in a
+        case-insensitive directory, where the cached null dentry still has
+        the alternate_name of the unlinked name.
+        """
+
+        self.mount_a.run_shell_payload("mkdir foo/")
+        self.mount_a.setfattr("foo/", "ceph.dir.casesensitive", "0")
+        self.mount_a.run_shell_payload("dd if=/dev/urandom of=foo/Foo conv=fsync bs=1 count=1")
+        self.mount_a.run_shell_payload("rm foo/Foo")
+        self.mount_a.run_shell_payload("dd if=/dev/urandom of=foo/FOO conv=fsync bs=1 count=1")
+
+        self._replay_and_check("foo", ["FOO"])
+
+    def test_recreate_after_unlink_normalization_only(self):
+        """
+        That the replay of a re-created dentry works in a case-sensitive
+        directory with only a normalization set: every dentry still has an
+        alternate_name.
+        """
+
+        dname = "file"
+        self.mount_a.run_shell_payload("mkdir foo/")
+        self.mount_a.setfattr("foo/", "ceph.dir.normalization", "nfd")
+        self.check_cs("foo", casesensitive=True, normalization="nfd")
+        self.mount_a.run_shell_payload(f"dd if=/dev/urandom of=foo/{dname} conv=fsync bs=1 count=1")
+        # trim the journal so that replay does not see the create
+        self.fs.flush()
+
+        self.mount_a.run_shell_payload(f"rm foo/{dname}")
+        self.mount_a.run_shell_payload(f"dd if=/dev/urandom of=foo/{dname} conv=fsync bs=1 count=1")
+
+        self._replay_and_check("foo", [dname])
+
+    def test_recreate_after_unlink_no_charmap(self):
+        """
+        Control: the same sequence in a directory without a charmap (no
+        alternate_name) replays fine.
+        """
+
+        dname = "file"
+        self.mount_a.run_shell_payload("mkdir foo/")
+        self.mount_a.run_shell_payload(f"dd if=/dev/urandom of=foo/{dname} conv=fsync bs=1 count=1")
+        self.fs.flush()
+
+        self.mount_a.run_shell_payload(f"rm foo/{dname}")
+        self.mount_a.run_shell_payload(f"dd if=/dev/urandom of=foo/{dname} conv=fsync bs=1 count=1")
+
+        self._replay_and_check("foo", [dname])
+
 
 class TestNormalization(CephFSTestCase, CharMapMixin):
     """
