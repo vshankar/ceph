@@ -514,6 +514,10 @@ bool StrayManager::_eval_stray(CDentry *dn)
 	}
       }
     }
+    if (purge_hold) {
+      dout(20) << " purges on hold" << dendl;
+      return false;
+    }
     if (dn->is_replicated()) {
       dout(20) << " replicated" << dendl;
       return false;
