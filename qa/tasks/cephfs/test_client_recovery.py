@@ -3,9 +3,11 @@
 Teuthology task for exercising CephFS client recovery
 """
 
+import json
 import logging
 import random
 import signal
+from io import StringIO
 from textwrap import dedent
 import time
 import distutils.version as version
@@ -17,6 +19,7 @@ import unittest
 from teuthology import contextutil
 from teuthology.orchestra import run
 from teuthology.exceptions import CommandFailedError
+from tasks.cephfs.filesystem import NoSuchRank
 from tasks.cephfs.fuse_mount import FuseMount
 from tasks.cephfs.cephfs_test_case import CephFSTestCase
 from teuthology.packaging import get_package_version
@@ -769,6 +772,130 @@ class TestClientRecovery(CephFSTestCase):
             time.sleep(self.fs.get_var("session_timeout") * 1.5)
             self.assertEqual(len(self.fs.mds_tell(["session", "ls"])), 0)
         self.mount_a.umount_wait(force=True)
+
+    def test_kept_session_of_client_without_auth(self):
+        """
+        Test that a client with a session timeout which cannot come back
+        after the MDS fails over does not hold the rank in up:clientreplay
+        until session_autoclose.
+
+        The client is a libcephfs mount that sets a session timeout, as
+        nfs-ganesha does. Its cephx entity is removed while it is mounted (as
+        "nfs export rm" does with the export's user) and its mon session is
+        reset by restarting the mons. The client keeps renewing caps over
+        its open MDS connections, so its session stays open, but it can no
+        longer authenticate to a mon and gets no newer MDSMap. After the file
+        system is failed it never reconnects to the new MDS, and since the
+        session carries "timeout" metadata the MDS keeps it for reclaim
+        instead of evicting it at the end of reconnect.
+        """
+        CLIENT_SESSION_TIMEOUT = 300
+        SESSION_AUTOCLOSE = 300
+
+        # rank 0 has to go active this long after the fs is made joinable:
+        # replay, the reconnect window and the rest of the way to active
+        rank_timeout = self.mds_reconnect_timeout + 2 * MDS_RESTART_GRACE
+        self.assertLess(rank_timeout, SESSION_AUTOCLOSE)
+        self.fs.set_var('session_autoclose', SESSION_AUTOCLOSE)
+
+        client_id = 'kept_session'
+        remote = self.mount_a.client_remote
+        keyring_path = os.path.join(self.mount_a.test_dir,
+                                    f'ceph.client.{client_id}.keyring')
+        asok_path = os.path.join(self.mount_a.test_dir,
+                                 f'client.{client_id}.asok')
+        keyring = self.fs.authorize(client_id, ('/', 'rw'))
+        remote.write_file(keyring_path, keyring)
+
+        # keep the client mounted with a file open for write
+        proc = self.mount_a._run_python(dedent(f"""
+            import os
+            import cephfs as libcephfs
+            fs = libcephfs.LibCephFS(conffile='', auth_id='{client_id}')
+            fs.conf_set('keyring', '{keyring_path}')
+            fs.conf_set('admin_socket', '{asok_path}')
+            # the client exists only after init()
+            fs.init()
+            fs.set_session_timeout({CLIENT_SESSION_TIMEOUT})
+            fs.mount(filesystem_name='{self.fs.name}')
+            fd = fs.open('/kept_session_file', 'w', 0o644)
+            fs.write(fd, b'kept session', 0)
+            fs.fsync(fd, 0)
+            # stay mounted until stdin is closed, then exit without
+            # unmounting: the client can't reach the cluster any more
+            while os.read(0, 4096):
+                pass
+            os._exit(0)
+            """))
+        self.mount_a.background_procs.append(proc)
+
+        def client_session():
+            for s in self.fs.rank_tell(['session', 'ls']):
+                if s['client_metadata'].get('entity_id') == client_id:
+                    return s
+            return None
+
+        def client_mds_epoch():
+            p = remote.run(args=['ceph', '--admin-daemon', asok_path, 'status'],
+                           stdout=StringIO(), timeout=60)
+            return json.loads(p.stdout.getvalue())['mds_epoch']
+
+        def rank0_state():
+            try:
+                return self.fs.get_rank(rank=0)['state']
+            except NoSuchRank:
+                return None
+
+        self.wait_until_true(lambda: client_session() is not None, timeout=60)
+        session = client_session()
+        gid = session['id']
+        self.assertEqual(session['client_metadata'].get('timeout'),
+                         str(CLIENT_SESSION_TIMEOUT))
+
+        try:
+            # cut the client off from the mons: it can't authenticate any more
+            self.run_ceph_cmd('auth', 'rm', f'client.{client_id}')
+            mons = self.mon_manager.get_mon_quorum_names()
+            for mon in mons:
+                self.mon_manager.kill_mon(mon)
+                self.mon_manager.revive_mon(mon)
+                self.mon_manager.wait_for_mon_quorum_size(len(mons))
+            epoch = client_mds_epoch()
+
+            self.fs.fail()
+            self.fs.set_joinable()
+            start = time.time()
+            elapsed = None
+            while time.time() - start < rank_timeout:
+                if rank0_state() == 'up:active':
+                    elapsed = time.time() - start
+                    break
+                time.sleep(5)
+
+            # otherwise the client could reconnect and nothing was tested
+            self.assertEqual(client_mds_epoch(), epoch,
+                             'client without a cephx entity got a newer MDSMap')
+            if elapsed is None:
+                try:
+                    kept = client_session()
+                except CommandFailedError:
+                    kept = 'unknown, session ls failed'
+                self.fail(f'rank 0 still {rank0_state()} {rank_timeout:.0f}s '
+                          f'after the file system was made joinable, '
+                          f'holding for session {gid}: {kept}')
+            log.info(f'rank 0 went active {elapsed:.0f}s after the file system '
+                     f'was made joinable')
+        finally:
+            # release the rank before stopping the client
+            if rank0_state() != 'up:active':
+                try:
+                    self.fs.rank_tell(['client', 'evict', f'id={gid}'])
+                except CommandFailedError:
+                    pass
+                self.fs.wait_for_state('up:active', rank=0,
+                                       timeout=SESSION_AUTOCLOSE + MDS_RESTART_GRACE)
+            self.mount_a.kill_background(proc)
+            remote.run(args=['rm', '-f', keyring_path, asok_path])
 
 
 @unittest.skip("Feature is not maintained and requires a full overhaul (see: "

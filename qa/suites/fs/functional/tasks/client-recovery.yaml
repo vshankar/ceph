@@ -12,6 +12,8 @@ overrides:
       - Degraded data redundancy
       - MDS_CLIENTS_LAGGY
       - Reduced data availability
+      - MON_DOWN
+      - out of quorum
 tasks:
   - cephfs_test_runner:
       fail_on_skip: false
