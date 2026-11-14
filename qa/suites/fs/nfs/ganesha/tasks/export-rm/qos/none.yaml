@@ -1,0 +1,4 @@
+# without QoS, both ganesha daemons release the removed export
+overrides:
+  ganesha-export-rm:
+    cluster_qos: false

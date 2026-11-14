@@ -1,0 +1,42 @@
+This suite checks that removing an export makes every ganesha daemon of
+the nfs cluster unmount it.
+
+Each ganesha daemon mounts CephFS (libcephfs) for an export, whether or
+not NFS clients use the export through that daemon. When the export is
+removed, a daemon unmounts it once nothing references the export any
+more, closing the mount's CephFS session. A daemon that keeps a
+reference to the export keeps the mount. Its session outlives the cephx
+user that mgr/nfs removes with the export, so the client cannot get
+monitor maps any more and misses MDS failovers. The MDS then holds every
+rank the client has a session on in up:clientreplay until it autocloses
+the session (see the reclaim suite). Going by the code, such a daemon
+also crashes when it shuts down: shutdown_handles() releases the handles
+of the export it never freed without an op context.
+
+The ganesha-export-rm task needs two ganesha daemons, one per host. It
+creates an export, writes to it over NFS through the first daemon only,
+removes it and checks that the CephFS sessions of the export's cephx user
+from both daemons close within two minutes. Each job picks one setting
+from qos/:
+
+  none      no QoS: both daemons release the export
+  cluster   Per_Export bandwidth control for the nfs cluster and the
+            export, with Cluster QoS between the two daemons
+
+The cluster job fails. With Cluster QoS, the daemon serving the writes
+sends the export's bandwidth use to the other daemon a few times a
+second. Ganesha's cluster_qos_process_pe() (MainNFSD/nfs_cluster_qos.c)
+looks the export up by id with get_gsh_export() for every such message
+and never puts the reference. The receiving daemon never frees the
+export and keeps its CephFS mount after the removal. The daemon serving
+the writes receives nothing and releases the export. On a failure the
+task evicts the kept session and restarts that daemon. Its message gives
+the number of Cluster QoS requests the daemon logged, the last reference
+count it logged for the export and the unit's exit status from the
+restart.
+
+Cluster QoS needs a ganesha built with ENABLE_QOS and ENABLE_CLUSTER_QOS
+and the peers listed in NFS_CORE_PARAM Cluster_Members, which cephadm
+does not set: qos/cluster.yaml has ganesha-reconf add it to the
+ganesha.conf template. The task fails early if Cluster QoS is not
+running.

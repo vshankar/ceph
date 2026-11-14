@@ -1,0 +1,25 @@
+overrides:
+  ceph:
+    conf:
+      osd:
+        osd shutdown pgref assert: true
+tasks:
+- cephadm:
+    roleless: false
+- cephadm.shell:
+    mon.a:
+      - ceph orch status
+      - ceph orch ps
+      - ceph orch ls
+      - ceph orch host ls
+      - ceph orch device ls
+- cephadm.shell:
+    mon.a:
+      # one ganesha daemon on each host; the export is created by the test
+      - cmd: ceph nfs cluster create nfs-ganesha-test 2
+      # for debug
+      - cmd: ceph orch ls --service-name nfs.nfs-ganesha-test --export
+      # sleep a bit
+      - cmd: sleep 60
+      # more debug
+      - cmd: ceph orch ps

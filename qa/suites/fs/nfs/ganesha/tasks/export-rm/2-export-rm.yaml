@@ -1,0 +1,11 @@
+overrides:
+  ceph:
+    log-ignorelist:
+      # a ganesha that kept the export is restarted
+      - CEPHADM_FAILED_DAEMON
+      - failed cephadm daemon
+# QoS or not comes from qos/
+tasks:
+- ganesha-export-rm:
+    cluster_id: nfs-ganesha-test
+    nfs_client: client.0

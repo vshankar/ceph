@@ -1,0 +1,8 @@
+# with Per_Export Cluster QoS, the ganesha daemon serving the writes
+# sends the export's bandwidth use to the other one, which then fails to
+# release the removed export
+overrides:
+  ganesha-reconf:
+    cluster_members: true
+  ganesha-export-rm:
+    cluster_qos: true
