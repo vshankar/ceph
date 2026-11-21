@@ -43,10 +43,246 @@ STATE_SCRIPT = dedent("""
                     e["xattrs"] = {{k: os.getxattr(p, k).decode()
                                    for k in sorted(os.listxattr(p))
                                    if k.startswith("user.")}}
+                if {links} and not stat.S_ISDIR(st.st_mode):
+                    e["ino"] = st.st_ino
+                    e["nlink"] = st.st_nlink
                 out[os.path.relpath(p, root)] = e
         return out
 
     print(json.dumps(state("{path}")))
+""")
+
+# Builds (phase 0) and then changes (phase 1, 2, ...) a tree of regular
+# files, symlinks and hardlinks under ROOT. The directories are made by
+# phase 0 only: a rollback does not create, remove or move directories.
+# ROOT, SEED and PHASE are prepended by the test.
+TREE_SCRIPT = dedent("""
+    import os, random, stat
+
+    DEPTH = 4            # levels of directories
+    FANOUT = 3           # subdirectories of a directory
+    FILES = 6            # regular files in each of them
+    BIG_FILES = 600      # and in the one large directory
+    OPS = 600            # changes made by a phase
+    MB = 1 << 20
+
+    rng = random.Random(SEED * 1000 + PHASE)
+    count = 0
+
+    def new_name(prefix):
+        global count
+        count += 1
+        return "%s%d_%d" % (prefix, PHASE, count)
+
+    def all_dirs():
+        # os.walk() does not descend into symlinks to directories
+        return sorted(dp for dp, dn, fn in os.walk(ROOT))
+
+    def names(d, pred):
+        out = []
+        for name in sorted(os.listdir(d)):
+            if pred(os.lstat(os.path.join(d, name)).st_mode):
+                out.append(os.path.join(d, name))
+        return out
+
+    def pick(dirs, pred):
+        for i in range(50):
+            found = names(rng.choice(dirs), pred)
+            if found:
+                return rng.choice(found)
+        return None
+
+    def data(small=False):
+        r = rng.random()
+        if r < 0.1:
+            n = 0
+        elif r < 0.7 or small:
+            n = rng.randint(1, 4096)
+        elif r < 0.98:
+            n = rng.randint(4097, 200000)
+        else:
+            # more than one object
+            n = rng.randint(4 * MB + 1, 9 * MB)
+        return rng.randbytes(n)
+
+    def write(p, small=False):
+        with open(p, "wb") as f:
+            f.write(data(small))
+
+    def target(dirs, d):
+        r = rng.random()
+        if r < 0.4:
+            t = pick([d], stat.S_ISREG)
+        elif r < 0.7:
+            t = pick(dirs, stat.S_ISREG)
+        elif r < 0.9:
+            t = rng.choice(dirs)
+        else:
+            return "dangling-" + new_name("t")
+        if t is None:
+            return "dangling-" + new_name("t")
+        return os.path.relpath(t, d)
+
+    def build():
+        dirs = [ROOT]
+        level = [ROOT]
+        for depth in range(DEPTH):
+            below = []
+            for d in level:
+                for i in range(FANOUT):
+                    p = os.path.join(d, "d%d" % i)
+                    os.mkdir(p)
+                    below.append(p)
+            dirs += below
+            level = below
+        big = os.path.join(ROOT, "big")
+        os.mkdir(big)
+        dirs.append(big)
+
+        files = []
+        for d in dirs:
+            for i in range(BIG_FILES if d == big else FILES):
+                p = os.path.join(d, "f%04d" % i)
+                write(p, small=(d == big))
+                files.append(p)
+        # hardlinks, in the same directory and in others
+        for p in rng.sample(files, len(files) // 4):
+            for i in range(rng.randint(1, 3)):
+                d = os.path.dirname(p) if rng.random() < 0.5 else rng.choice(dirs)
+                os.link(p, os.path.join(d, new_name("h")))
+        for d in dirs:
+            for i in range(2):
+                os.symlink(target(dirs, d), os.path.join(d, new_name("s")))
+
+    def is_file(mode):
+        return stat.S_ISREG(mode)
+
+    def is_link(mode):
+        return stat.S_ISLNK(mode)
+
+    def not_dir(mode):
+        return not stat.S_ISDIR(mode)
+
+    def op_modify(dirs):
+        p = pick(dirs, is_file)
+        if p:
+            write(p)
+        return p
+
+    def op_append(dirs):
+        p = pick(dirs, is_file)
+        if p:
+            with open(p, "ab") as f:
+                f.write(data(small=True))
+        return p
+
+    def op_truncate(dirs):
+        p = pick(dirs, is_file)
+        if p:
+            os.truncate(p, rng.randint(0, os.lstat(p).st_size))
+        return p
+
+    def op_chmod(dirs):
+        p = pick(dirs, is_file)
+        if p:
+            os.chmod(p, rng.choice([0o600, 0o640, 0o644, 0o664, 0o755]))
+        return p
+
+    def op_xattr(dirs):
+        p = pick(dirs, is_file)
+        if p:
+            name = "user.x%d" % rng.randint(0, 2)
+            if name in os.listxattr(p) and rng.random() < 0.3:
+                os.removexattr(p, name)
+            else:
+                os.setxattr(p, name, new_name("v").encode())
+        return p
+
+    def op_unlink(dirs):
+        p = pick(dirs, not_dir)
+        if p:
+            os.unlink(p)
+        return p
+
+    def op_create(dirs):
+        p = os.path.join(rng.choice(dirs), new_name("c"))
+        write(p)
+        return p
+
+    def op_replace(dirs):
+        # the same name, another inode
+        p = pick(dirs, not_dir)
+        if p:
+            os.unlink(p)
+            write(p)
+        return p
+
+    def op_rename(dirs):
+        p = pick(dirs, not_dir)
+        if p:
+            os.rename(p, os.path.join(rng.choice(dirs), new_name("r")))
+        return p
+
+    def op_rename_over(dirs):
+        p = pick(dirs, not_dir)
+        q = pick(dirs, not_dir)
+        if p and q and p != q:
+            os.rename(p, q)
+            return p
+        return None
+
+    def op_link(dirs):
+        p = pick(dirs, is_file)
+        if p:
+            d = os.path.dirname(p) if rng.random() < 0.5 else rng.choice(dirs)
+            os.link(p, os.path.join(d, new_name("h")))
+        return p
+
+    def op_symlink(dirs):
+        d = rng.choice(dirs)
+        p = os.path.join(d, new_name("s"))
+        os.symlink(target(dirs, d), p)
+        return p
+
+    def op_retarget(dirs):
+        p = pick(dirs, is_link)
+        if p:
+            os.unlink(p)
+            os.symlink(target(dirs, os.path.dirname(p)), p)
+        return p
+
+    def op_swap(dirs):
+        # a regular file becomes a symlink, a symlink a regular file
+        p = pick(dirs, not_dir)
+        if p:
+            was_link = is_link(os.lstat(p).st_mode)
+            os.unlink(p)
+            if was_link:
+                write(p)
+            else:
+                os.symlink(target(dirs, os.path.dirname(p)), p)
+        return p
+
+    OPS_TABLE = [
+        (op_modify, 12), (op_append, 6), (op_truncate, 6), (op_chmod, 6),
+        (op_xattr, 6), (op_unlink, 12), (op_create, 8), (op_replace, 8),
+        (op_rename, 10), (op_rename_over, 4), (op_link, 10), (op_symlink, 4),
+        (op_retarget, 4), (op_swap, 4),
+    ]
+
+    def change():
+        dirs = all_dirs()
+        ops = [op for op, weight in OPS_TABLE for i in range(weight)]
+        done = 0
+        while done < OPS:
+            if rng.choice(ops)(dirs):
+                done += 1
+        assert all_dirs() == dirs
+
+    if PHASE == 0:
+        build()
+    else:
+        change()
 """)
 
 
@@ -55,6 +291,7 @@ class TestSnapRollback(CephFSTestCase):
     CLIENTS_REQUIRED = 1
 
     SUBVOL = "rbsv"
+    TREE_SEED = 1
     # the .meta file of the subvolume: it is in every snapshot and gets
     # rolled back along with everything else
     ROOT_FILES = 1
@@ -92,9 +329,19 @@ class TestSnapRollback(CephFSTestCase):
         self.mount_a.run_shell(["sudo", "setfattr", "-n", "ceph.dir.subvolume",
                                 "-v", "1" if val else "0", self.root])
 
-    def _state(self, path):
+    def _state(self, path, links=False):
+        """
+        What is under `path`. With `links`, the inode number and the link
+        count of everything but directories are part of it.
+        """
         abs_path = os.path.join(self.mount_a.hostfs_mntpt, path)
-        return json.loads(self.mount_a.run_python(STATE_SCRIPT.format(path=abs_path)))
+        script = STATE_SCRIPT.format(path=abs_path, links=links)
+        return json.loads(self.mount_a.run_python(script))
+
+    def _tree(self, phase):
+        root = os.path.join(self.mount_a.hostfs_mntpt, self.dir)
+        script = f"ROOT = {root!r}\nSEED = {self.TREE_SEED}\nPHASE = {phase}\n" + TREE_SCRIPT
+        self.mount_a.run_python(script, timeout=1800)
 
     def _snap_dir(self, snap):
         return os.path.join(self.root, ".snap", snap)
@@ -108,6 +355,19 @@ class TestSnapRollback(CephFSTestCase):
 
     def _rmsnap(self, snap):
         self._subvolume_cmd("snapshot", "rm", self.fs.name, self.SUBVOL, snap)
+
+    def _num_splits(self):
+        return self.fs.rank_asok(['perf', 'dump', 'mds'])['mds']['dir_split']
+
+    def _wait_for_strays_to_settle(self, timeout=180):
+        # Not for none to be left: an inode that was hardlinked when a
+        # snapshot was taken stays in stray for its old_inodes.
+        seen = []
+
+        def settled():
+            seen.append(self._num_strays())
+            return len(seen) >= 4 and len(set(seen[-4:])) == 1
+        self.wait_until_true(settled, timeout=timeout)
 
     def _num_strays(self):
         return self.fs.rank_asok(['perf', 'dump', 'mds_cache', 'num_strays'])['mds_cache']['num_strays']
@@ -669,6 +929,75 @@ class TestSnapRollback(CephFSTestCase):
 
         self._restart_mds(flush=True)
         self.assertEqual(self._state(d), expected["s1"])
+
+    def test_rollback_tree(self):
+        """
+        A deep tree with many regular files, symlinks and hardlinks, the
+        latter in the same and in other directories, and with a directory
+        that is large enough to be fragmented. Between the snapshots, changes
+        are made at random (from a fixed seed) to anything but the
+        directories: those stay as they are, a rollback does not restore
+        them.
+        """
+        # have the large directory fragmented
+        self.config_set('mds', 'mds_bal_split_size', 100)
+        self.addCleanup(self.config_rm, 'mds', 'mds_bal_split_size')
+        splits = self._num_splits()
+
+        self._tree(0)
+        self.wait_until_true(lambda: self._num_splits() > splits, timeout=120)
+        snaps = ("s1", "s2", "s3")
+        for phase, snap in enumerate(snaps, 1):
+            self._mksnap(snap)
+            self._tree(phase)
+        expected = {snap: self._state(self._snap_path(snap), links=True)
+                    for snap in snaps}
+        self.assertNotEqual(self._state(self.dir, links=True), expected["s3"])
+
+        def check(snap):
+            self.assertEqual(self._state(self.dir, links=True), expected[snap],
+                             f"head does not match snapshot {snap}")
+            for s in snaps:
+                self.assertEqual(self._state(self._snap_path(s), links=True),
+                                 expected[s],
+                                 f"snapshot {s} changed after rollback to {snap}")
+
+        def rollback(snap):
+            stats = self._rollback(f"/{self.root}", snap)
+            self.assertEqual(stats["skipped"], 0)
+            self.assertEqual(stats["failed"], 0)
+            self.assertGreater(stats["rolled_back"], 0)
+            self.assertGreater(stats["removed"], 0)
+            self.assertGreater(stats["reinstated"] + stats["relinked"]
+                               + stats["linked"], 0)
+            return stats
+
+        # right away: what was unlinked may still be in stray
+        self.mount_a.umount_wait()
+        rollback("s2")
+        self.mount_a.mount_wait()
+        check("s2")
+        self._check_no_damage()
+
+        # more changes, and back to an older snapshot once what was
+        # unlinked has been purged
+        self._tree(len(snaps) + 1)
+        self.mount_a.umount_wait()
+        self._wait_for_strays_to_settle()
+        stats = rollback("s1")
+        self.assertGreater(stats["reinstated"], 0)
+        self.mount_a.mount_wait()
+        check("s1")
+        self._check_no_damage()
+
+        # journal replay
+        self._restart_mds()
+        check("s1")
+
+        # reload from the metadata pool
+        self._restart_mds(flush=True)
+        check("s1")
+        self._check_no_damage()
 
     def test_rollback_evicts_clients(self):
         """
